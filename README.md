@@ -2,7 +2,7 @@
 title = colophon
 author = adammharris
 created = 2026-07-06
-contents = [[Design](docs/design.md)]
+contents = [[Design](docs/DESIGN.md)]
 ```
 
 # colophon
