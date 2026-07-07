@@ -35,6 +35,17 @@
 //! [`index::IndexStore`]) are staked out here so nothing diaryx-specific leaks
 //! into the eventual public API.
 
+// At least one embedded-metadata format backend must be compiled in, otherwise
+// colophon can neither parse nor serialize any metadata. The format features
+// (`yaml`, `json`, `fig-lang`) forward to the matching `fig` parser — see
+// `Cargo.toml`.
+#[cfg(not(any(feature = "yaml", feature = "json", feature = "fig-lang")))]
+compile_error!(
+    "colophon needs at least one metadata-format feature enabled: \
+     `yaml` (the default), `json`, or `fig-lang`. \
+     You have disabled the default feature without selecting a replacement."
+);
+
 pub mod document;
 pub mod edit;
 pub mod error;

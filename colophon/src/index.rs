@@ -362,7 +362,9 @@ impl IndexStore for FileIndex {
     }
 }
 
-#[cfg(test)]
+// These engine tests use YAML fixtures throughout, so they run whenever the
+// (default) `yaml` feature is on.
+#[cfg(all(test, feature = "yaml"))]
 mod tests {
     use super::*;
 

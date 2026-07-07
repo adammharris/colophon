@@ -3,6 +3,7 @@ title = colophon
 author = adammharris
 created = 2026-07-06
 contents = [[Design](docs/DESIGN.md)]
+registry = registry.md
 ```
 
 # colophon

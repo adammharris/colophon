@@ -42,10 +42,18 @@ impl MetaCarrier {
 
 /// The whole-file metadata format implied by `path`'s extension, if any.
 /// These are the extensions colophon treats as config documents.
+///
+/// Each extension is recognized only when its format feature is compiled in: a
+/// `.json` file is a config document under the `json` feature, and an ordinary
+/// (metadata-less) prose document without it. This keeps colophon from claiming
+/// to read a format whose parser was left out of the build.
 pub fn whole_file_format(path: &Path) -> Option<fig::Format> {
     match path.extension()?.to_str()? {
+        #[cfg(feature = "yaml")]
         "yaml" | "yml" => Some(fig::Format::Yaml),
+        #[cfg(feature = "json")]
         "json" => Some(fig::Format::Json),
+        #[cfg(feature = "fig-lang")]
         "fig" | "figl" => Some(fig::Format::Fig),
         _ => None,
     }
@@ -125,6 +133,7 @@ impl Document {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn parses_yaml_frontmatter_and_body() {
         let text = "---\ntitle: Root\ncontents:\n- a.md\n---\n# Body\n\nhello\n";
@@ -135,6 +144,7 @@ mod tests {
         assert!(doc.has_meta());
     }
 
+    #[cfg(feature = "fig-lang")]
     #[test]
     fn parses_fig_fenced_frontmatter() {
         let text = "```fig\ntitle = colophon\ncontents = [docs/design.md]\n```\n# Body\n";
@@ -148,6 +158,7 @@ mod tests {
         assert!(doc.has_meta());
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parses_json_frontmatter() {
         let text = ";;;\n{\"title\": \"Root\"}\n;;;\nbody\n";
@@ -156,6 +167,7 @@ mod tests {
         assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterJson)));
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn parses_yaml_endmatter() {
         let text = "# Body first\n```endmatter\ntitle: Tail\n```\n";
@@ -165,6 +177,7 @@ mod tests {
         assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::EndmatterYaml)));
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn a_config_file_is_a_document_whose_content_is_all_metadata() {
         let text = "title: ID registry\npart_of: index.md\nregistry:\n  abc: a.md\n";
@@ -179,6 +192,7 @@ mod tests {
         assert!(doc.has_meta());
     }
 
+    #[cfg(feature = "fig-lang")]
     #[test]
     fn a_fig_config_file_parses_the_dialect() {
         let text = "title = settings\npart_of = index.md\n";
@@ -205,6 +219,7 @@ mod tests {
         assert_eq!(doc.carrier, None);
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn crlf_fences_are_handled() {
         let text = "---\r\ntitle: Root\r\n---\r\nbody\r\n";

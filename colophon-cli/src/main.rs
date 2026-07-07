@@ -141,11 +141,16 @@ enum Command {
     },
 }
 
-/// CLI spelling of the metadata formats colophon compiles in.
+/// CLI spelling of the metadata formats colophon compiles in. Variants track the
+/// crate's format features: YAML is always available; JSON and the native fig
+/// dialect appear only when their features are enabled, so `--format` never
+/// offers a format whose parser is not in the binary.
 #[derive(Clone, Copy, ValueEnum)]
 enum MetaFormat {
     Yaml,
+    #[cfg(feature = "json")]
     Json,
+    #[cfg(feature = "fig-lang")]
     Fig,
 }
 
@@ -153,7 +158,9 @@ impl From<MetaFormat> for Format {
     fn from(f: MetaFormat) -> Format {
         match f {
             MetaFormat::Yaml => Format::Yaml,
+            #[cfg(feature = "json")]
             MetaFormat::Json => Format::Json,
+            #[cfg(feature = "fig-lang")]
             MetaFormat::Fig => Format::Fig,
         }
     }

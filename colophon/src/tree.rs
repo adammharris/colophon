@@ -136,7 +136,8 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     }
 }
 
-#[cfg(test)]
+// These tests use YAML frontmatter fixtures, so they run under the `yaml` feature.
+#[cfg(all(test, feature = "yaml"))]
 mod tests {
     use super::*;
     use crate::exec::block_on;

@@ -370,7 +370,9 @@ fn rerelativize(
     editor.render()
 }
 
-#[cfg(test)]
+// These engine tests use YAML fixtures throughout, so they run whenever the
+// (default) `yaml` feature is on.
+#[cfg(all(test, feature = "yaml"))]
 mod tests {
     use super::*;
     use crate::exec::block_on;
@@ -408,6 +410,9 @@ mod tests {
             .build()
     }
 
+    // Exercises inheritance of a `fig`-dialect parent block, so it needs that
+    // backend on top of the module-wide `yaml` gate.
+    #[cfg(feature = "fig-lang")]
     #[test]
     fn create_links_both_directions_in_the_parents_format() {
         let dir = tempdir("create");

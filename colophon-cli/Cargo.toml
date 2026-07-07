@@ -18,7 +18,18 @@ name = "colophon"
 path = "src/main.rs"
 
 [dependencies]
-# The library.
+# The library. Inherited plainly, so colophon's own default feature (`yaml`) is
+# always on — YAML is a hard baseline for the CLI, which seeds `registry.yaml`
+# and falls back to `---` frontmatter. The other formats are additive and
+# forwarded through this crate's features below.
 colophon.workspace = true
 # Arg parsing.
 clap = { version = "4.5", features = ["derive"] }
+
+[features]
+# JSON and the native fig dialect ship in the default binary, but a downstream
+# build can drop either with `--no-default-features` to shrink `libfig.a`. The
+# `--format` flag only offers the formats compiled in (see `MetaFormat`).
+default = ["json", "fig-lang"]
+json = ["colophon/json"]
+fig-lang = ["colophon/fig-lang"]

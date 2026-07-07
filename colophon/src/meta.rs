@@ -194,6 +194,7 @@ fn fig_key_to_string(key: fig::Value) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn parses_frontmatter_mapping() {
         let m = parse_mapping("title: Hello\ncount: 42\ntags:\n- a\n- b\n", fig::Format::Yaml).unwrap();
@@ -205,6 +206,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "fig-lang")]
     #[test]
     fn parses_fig_dialect_mapping() {
         let m = parse_mapping("title = Hello\ntags = [a, b]\n", fig::Format::Fig).unwrap();
@@ -223,6 +225,7 @@ mod tests {
         assert!(Value::Null.link_strings().is_empty());
     }
 
+    #[cfg(all(feature = "yaml", feature = "fig-lang"))]
     #[test]
     fn round_trips_through_fig() {
         for format in [fig::Format::Yaml, fig::Format::Fig] {

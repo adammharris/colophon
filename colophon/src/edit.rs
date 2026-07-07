@@ -15,6 +15,19 @@ use fig::{Embed, EmbedType, Segment};
 use crate::document::MetaCarrier;
 use crate::error::{Error, Result};
 
+/// The frontmatter archetype used to synthesize a metadata block for a document
+/// that has none. YAML (`---`) is the convention when compiled in; otherwise the
+/// first other format that is. Exactly one arm survives `cfg` stripping, and the
+/// `compile_error!` in `lib.rs` guarantees at least one does.
+fn default_embed_type() -> EmbedType {
+    #[cfg(feature = "yaml")]
+    return EmbedType::FrontmatterYaml;
+    #[cfg(all(not(feature = "yaml"), feature = "json"))]
+    return EmbedType::FrontmatterJson;
+    #[cfg(all(not(feature = "yaml"), not(feature = "json"), feature = "fig-lang"))]
+    return EmbedType::FrontmatterFig;
+}
+
 /// A comment-preserving editor over a document's metadata, generic over where
 /// the metadata lives.
 pub enum MetaEditor {
@@ -37,8 +50,9 @@ impl MetaEditor {
 
     /// Open an editor over `text`, creating the metadata block when the
     /// document has none: an explicit carrier is honored (an absent fenced
-    /// block is synthesized in place), and `None` defaults to fresh `---`
-    /// YAML frontmatter.
+    /// block is synthesized in place), and `None` defaults to a fresh
+    /// frontmatter block in [`default_embed_type`]'s archetype (`---` YAML
+    /// when that feature is compiled in).
     pub fn open_or_init(text: &str, carrier: Option<MetaCarrier>) -> Result<Self> {
         Ok(match carrier {
             Some(MetaCarrier::WholeFile(format)) => {
@@ -49,7 +63,7 @@ impl MetaEditor {
             }
             None => MetaEditor::Fenced(Embed::open_or_init(
                 text.as_bytes(),
-                EmbedType::FrontmatterYaml,
+                default_embed_type(),
             )?),
         })
     }
@@ -178,6 +192,7 @@ mod tests {
         crate::document::Document::parse(path, text).unwrap().carrier
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn set_preserves_comments_and_format() {
         let text = "---\n# keep me\ntitle: Old\n---\nbody\n";
@@ -185,6 +200,7 @@ mod tests {
         assert_eq!(out, "---\n# keep me\ntitle: New\n---\nbody\n");
     }
 
+    #[cfg(feature = "fig-lang")]
     #[test]
     fn set_in_a_fig_block_stays_fig() {
         let text = "```fig\ntitle = colophon\n```\nbody\n";
@@ -194,6 +210,7 @@ mod tests {
         assert!(out.ends_with("```\nbody\n"));
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn set_edits_a_bare_config_document() {
         let text = "# workspace registry\ntitle: ID registry\nregistry:\n  abc: a.md\n";
@@ -209,6 +226,7 @@ mod tests {
         assert!(!out.contains("---"), "no fences grown: {out}");
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn set_creates_a_block_when_none_exists() {
         let out = set_in_text("just a body\n", None, "title", infer_scalar("T")).unwrap();
@@ -216,6 +234,7 @@ mod tests {
         assert!(out.ends_with("just a body\n"));
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn unset_removes_only_the_named_key() {
         let text = "---\ntitle: T\ndraft: true\n---\nbody\n";
@@ -233,6 +252,7 @@ mod tests {
         assert_eq!(infer_scalar("hello"), fig::Value::Str("hello".into()));
     }
 
+    #[cfg(feature = "yaml")]
     #[test]
     fn dotted_paths_mix_keys_and_indices() {
         let text = "---\ncontents:\n- a.md\n- b.md\n---\n";
