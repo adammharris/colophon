@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["colophon", "colophon-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+repository = "https://github.com/adammharris/colophon"
+homepage = "https://github.com/adammharris/colophon"
+readme = "README.md"
+license-file = "MIT or Apache-2.0"
+
+[workspace.dependencies]
+# Embedded-metadata backend. fig is a Zig-backed parser/editor (its build.rs
+# runs `zig build`). The value tree is colophon's common currency.
+fig = { version = "2.1.0", default-features = false, features = ["serde", "yaml", "json", "fig", "derive", "indexmap"] }
+indexmap = { version = "2.0", features = ["serde"] }
+thiserror = "2.0"
+
+# Internal crate.
+colophon = { path = "colophon", version = "0.1.0" }

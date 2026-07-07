@@ -1,0 +1,24 @@
+[package]
+name = "colophon-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
+description = "Command-line companion for the colophon self-describing workspace library."
+keywords = ["markdown", "frontmatter", "workspace", "cli"]
+categories = ["command-line-utilities"]
+# Not published yet — dogfooded alongside the library.
+publish = false
+
+# The crate is `colophon-cli`; the installed command is `colophon`.
+[[bin]]
+name = "colophon"
+path = "src/main.rs"
+
+[dependencies]
+# The library.
+colophon.workspace = true
+# Arg parsing.
+clap = { version = "4.5", features = ["derive"] }
