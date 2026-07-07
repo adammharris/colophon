@@ -140,6 +140,12 @@ enum Command {
         /// The ID to resolve.
         id: String,
     },
+    /// List the documents that link to a document (its backlinks), across the
+    /// workspace, as `source<TAB>site<TAB>path|id`.
+    Backlinks {
+        /// The document whose backlinks to list.
+        file: PathBuf,
+    },
 }
 
 /// CLI spelling of the metadata formats colophon compiles in. Variants track the
@@ -184,6 +190,7 @@ fn main() -> ExitCode {
         Command::Rm { path, force } => cmd_rm(&path, force),
         Command::Id { file } => cmd_id(&file),
         Command::Resolve { id } => cmd_resolve(&id),
+        Command::Backlinks { file } => cmd_backlinks(&file),
     };
     match result {
         Ok(code) => code,
@@ -569,9 +576,12 @@ fn cmd_mv(from: &Path, to: &Path) -> CmdResult {
 fn cmd_rm(path: &Path, force: bool) -> CmdResult {
     let ctx = find_root()?;
     let mut ws = workspace(&ctx)?;
-    block_on(ws.delete(&ws_rel(&ctx, path)?, force))?;
+    let danglers = block_on(ws.delete(&ws_rel(&ctx, path)?, force))?;
     save_index(&ctx, &mut ws)?;
     println!("deleted {}", path.display());
+    for finding in &danglers {
+        eprintln!("warning: now dangling — {finding}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -582,6 +592,20 @@ fn cmd_id(file: &Path) -> CmdResult {
     let id = block_on(ws.register(&ws_rel(&ctx, file)?, Trigger::Link))?;
     save_index(&ctx, &mut ws)?;
     println!("{}", link::id_target(&id));
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_backlinks(file: &Path) -> CmdResult {
+    let ctx = find_root()?;
+    let target = ws_rel(&ctx, file)?;
+    let links = block_on(workspace(&ctx)?.backlinks_to(&ctx.root_doc, &target))?;
+    for backlink in &links {
+        let kind = if backlink.by_id { "id" } else { "path" };
+        println!("{}\t{}\t{kind}", backlink.source.display(), backlink.site);
+    }
+    if links.is_empty() {
+        eprintln!("no backlinks to {}", target.display());
+    }
     Ok(ExitCode::SUCCESS)
 }
 

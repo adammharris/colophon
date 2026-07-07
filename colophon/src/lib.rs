@@ -72,5 +72,5 @@ pub use link::{Link, Wikilink};
 pub use meta::{Mapping, Value};
 pub use relation::{Cardinality, Edge, Relation, RelationSet};
 pub use tree::{Node, NodeKind};
-pub use validate::{CensusEntry, Finding, LinkSite, Resolution};
+pub use validate::{Backlink, CensusEntry, Finding, LinkSite, Resolution};
 pub use workspace::{Target, Workspace};

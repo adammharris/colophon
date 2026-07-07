@@ -29,7 +29,7 @@
 //! External targets (URLs, `mailto:`) are never checked. Autofix comes with
 //! the mutation layer's growth; findings first.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -136,6 +136,22 @@ impl CensusEntry {
     }
 }
 
+/// An inbound reference to a document, as discovered by the census: which
+/// document links here ([`source`](Backlink::source)), where in it
+/// ([`site`](Backlink::site)), and whether the link is by stable id (survives
+/// moves) or by path (rewritten on a move). The inverse of a forward
+/// [`CensusEntry`] — the marquee payoff of the identity layer (DESIGN §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Backlink {
+    /// The document that links to the target.
+    pub source: PathBuf,
+    /// Where in `source` the link is written.
+    pub site: LinkSite,
+    /// `true` when the link is a `colophon:<id>` reference (location-independent),
+    /// `false` when it is a path.
+    pub by_id: bool,
+}
+
 /// One integrity finding. `doc` is always the document that *declares* the
 /// problem (workspace-relative); `site` is where in it the offending link sits.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,6 +243,53 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     /// heals *toward* the census, never the reverse.
     pub async fn census(&self, start: impl AsRef<Path>) -> Result<Vec<CensusEntry>> {
         Ok(self.walk(start.as_ref()).await?.0)
+    }
+
+    /// The backlink map for the workspace reachable from `start`: every resolved
+    /// target to the inbound references ([`Backlink`]s) that reach it, path- and
+    /// id-form alike. This is the census inverted — recomputed from the
+    /// documents, so it is always fresh (the Route-N "reconcile-on-load": no
+    /// stored index to drift). Each target's backlinks are sorted by source.
+    pub async fn backlinks(&self, start: impl AsRef<Path>) -> Result<BTreeMap<PathBuf, Vec<Backlink>>> {
+        let mut map: BTreeMap<PathBuf, Vec<Backlink>> = BTreeMap::new();
+        for entry in self.census(start).await? {
+            let by_id = matches!(entry.resolution, Resolution::Id { .. });
+            let Some(target) = entry.resolution.resolved_path().cloned() else {
+                continue;
+            };
+            map.entry(target).or_default().push(Backlink {
+                source: entry.source,
+                site: entry.site,
+                by_id,
+            });
+        }
+        for links in map.values_mut() {
+            links.sort_by(|a, b| a.source.cmp(&b.source).then(a.by_id.cmp(&b.by_id)));
+        }
+        Ok(map)
+    }
+
+    /// The inbound references to a single `target` (workspace-relative) reachable
+    /// from `start`, sorted by source. The focused form of
+    /// [`backlinks`](Workspace::backlinks) for "who links here?".
+    pub async fn backlinks_to(
+        &self,
+        start: impl AsRef<Path>,
+        target: impl AsRef<Path>,
+    ) -> Result<Vec<Backlink>> {
+        let target = link::normalize(target);
+        let mut links: Vec<Backlink> = self
+            .census(start)
+            .await?
+            .into_iter()
+            .filter(|entry| entry.resolution.resolved_path() == Some(&target))
+            .map(|entry| {
+                let by_id = matches!(entry.resolution, Resolution::Id { .. });
+                Backlink { source: entry.source, site: entry.site, by_id }
+            })
+            .collect();
+        links.sort_by(|a, b| a.source.cmp(&b.source).then(a.by_id.cmp(&b.by_id)));
+        Ok(links)
     }
 
     /// The shared spanning-tree walk: gathers the forward-link census and the
@@ -478,6 +541,44 @@ mod tests {
                 && matches!(e.resolution, Resolution::Broken)),
             "{census:?}"
         );
+    }
+
+    #[test]
+    fn backlinks_invert_the_census_across_relations_and_body() {
+        let dir = tempdir("backlinks");
+        write(&dir, "index.md", "---\ncontents:\n- a.md\n- b.md\n---\n");
+        write(&dir, "a.md", "---\npart_of: index.md\n---\n");
+        write(
+            &dir,
+            "b.md",
+            "---\npart_of: index.md\nlinks:\n- a.md\n---\nSee [[a.md]] again.\n",
+        );
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+
+        // Who links to a.md? index.md (contents), b.md (links), b.md (body).
+        let to_a = block_on(ws.backlinks_to("index.md", "a.md")).unwrap();
+        assert_eq!(to_a.len(), 3, "{to_a:?}");
+        assert!(
+            to_a.iter().any(|bl| bl.source == Path::new("index.md")
+                && matches!(&bl.site, LinkSite::Relation(r) if r == "contents")),
+            "{to_a:?}"
+        );
+        assert!(
+            to_a.iter().any(|bl| bl.source == Path::new("b.md")
+                && matches!(&bl.site, LinkSite::Relation(r) if r == "links")),
+            "{to_a:?}"
+        );
+        assert!(
+            to_a.iter().any(|bl| bl.source == Path::new("b.md")
+                && matches!(bl.site, LinkSite::Body(_))),
+            "{to_a:?}"
+        );
+        // All path-form (this workspace has no registry / id links).
+        assert!(to_a.iter().all(|bl| !bl.by_id), "{to_a:?}");
+
+        // The full map keys targets by path; a.md is one of them.
+        let map = block_on(ws.backlinks("index.md")).unwrap();
+        assert_eq!(map[&PathBuf::from("a.md")].len(), 3);
     }
 
     #[test]
