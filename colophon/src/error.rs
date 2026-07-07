@@ -12,6 +12,10 @@ pub enum Error {
     /// A structural invariant was violated (e.g. malformed frontmatter fence).
     #[error("{0}")]
     Structure(String),
+
+    /// The storage backend failed.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Convenience alias for results in this crate.

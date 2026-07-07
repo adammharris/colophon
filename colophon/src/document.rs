@@ -140,18 +140,9 @@ mod tests {
     fn crlf_fences_are_handled() {
         let text = "---\r\ntitle: Root\r\n---\r\nbody\r\n";
         let doc = Document::parse("x.md", text).unwrap();
-        // Fence detection and the content/body split are CRLF-clean. (fig's
-        // YAML parser currently keeps the trailing `\r` in a scalar on CRLF
-        // input — a pre-existing core quirk, tracked upstream — so the value
-        // assertion trims it rather than enshrining either behavior.)
         assert_eq!(doc.embed, Some(EmbedType::FrontmatterYaml));
         assert_eq!(doc.body, "body\r\n");
-        assert_eq!(
-            doc.meta
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::trim_end),
-            Some("Root")
-        );
+        // Exact scalar — fig ≥ 2.1.1 treats \r\n as a single line break.
+        assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));
     }
 }

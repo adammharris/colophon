@@ -161,6 +161,69 @@ impl Metadata {
     }
 }
 
+/// [`Storage`] over the process filesystem (`std::fs`).
+///
+/// The trait is async so that genuinely async backends (network, OPFS) fit;
+/// this adapter's futures are immediately ready, so any executor — including
+/// the dependency-free [`crate::exec::block_on`] — drives them to completion
+/// in a single poll.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StdFs;
+
+impl Storage for StdFs {
+    async fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
+    async fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        std::fs::read_to_string(path)
+    }
+
+    async fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+        std::fs::read_dir(path)?
+            .map(|entry| {
+                let entry = entry?;
+                Ok(DirEntry::new(entry.path(), convert_file_type(entry.file_type()?)))
+            })
+            .collect()
+    }
+
+    async fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        std::fs::write(path, contents)
+    }
+
+    async fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(path)
+    }
+
+    async fn remove_file(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_file(path)
+    }
+
+    async fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_dir_all(path)
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
+    async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        let md = std::fs::metadata(path)?;
+        Ok(Metadata::new(convert_file_type(md.file_type()), md.len(), md.modified().ok()))
+    }
+}
+
+fn convert_file_type(ft: std::fs::FileType) -> FileType {
+    if ft.is_dir() {
+        FileType::DIR
+    } else if ft.is_file() {
+        FileType::FILE
+    } else {
+        FileType::SYMLINK
+    }
+}
+
 /// The type of a filesystem entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileType {

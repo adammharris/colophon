@@ -117,6 +117,13 @@ pub fn serialize_mapping(map: &Mapping, format: fig::Format) -> Result<String> {
     Ok(value.serialize_with(format, fig::SerializeOptions::default().width(1))?)
 }
 
+/// Serialize any metadata value to a string in `format`. What `serialize_mapping`
+/// is for whole frontmatter blocks, this is for a value plucked out of one
+/// (the CLI's `get` on a compound field).
+pub fn serialize_value(value: &Value, format: fig::Format) -> Result<String> {
+    Ok(fig::Value::from(value).serialize_with(format, fig::SerializeOptions::default().width(1))?)
+}
+
 // ---------------------------------------------------------------------------
 // Conversions to/from fig's native value tree (the serde-free bridge).
 // ---------------------------------------------------------------------------

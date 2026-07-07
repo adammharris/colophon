@@ -284,9 +284,13 @@ not yet ported.
 | Identity policy + registration triggers | `identity` | ✅ seam + placeholder minter |
 | Index store (id↔path registry) | `index` | ✅ `NoIndex` + `InMemoryIndex` |
 | Workspace composition + builder | `workspace` | ✅ type-flipping builder |
-| Scan / traverse (fs-driven) | `workspace` | ⏳ `TODO(port)` |
-| Mutation with link maintenance | — | ⏳ port from `diaryx_core` |
-| Validation + autofix | — | ⏳ port from `diaryx_core::validate` |
+| Traverse (spanning tree from a root) | `tree` | ✅ `Workspace::tree`; missing/cyclic/unreadable targets are marked nodes |
+| Scan (directory-driven discovery) | — | ⏳ waits on `StructureSource` |
+| Mutation with link maintenance | `mutate` | ✅ first cut: `create`/`rename`/`delete` (parent entry, inverse links, re-relativization, labels kept; fig `Embed` edits). Remaining diaryx ops ⏳ |
+| Validation | `validate` | ✅ findings: broken link, case mismatch, duplicate containment, missing inverse, unreadable. Autofix ⏳ |
+| Storage adapter + executor | `fs`, `exec` | ✅ `StdFs` + dependency-free `block_on` |
+| Link text + path arithmetic | `link` | ✅ labeled links, resolve/relative, lexical normalize |
+| Single-document edits | `edit` | ✅ format-preserving `set`/`unset` over text |
 | Multi-format embedded metadata | `document`/`meta` | ✅ read side (fig 2.1's `detect` + `split` *are* the fence layer); ⏳ format-preserving writes ride the mutation port |
 | serde / fig backend split | — | ⏳ planned (feature gates) |
 | `StructureSource` (filesystem intake) | — | ⏳ planned |

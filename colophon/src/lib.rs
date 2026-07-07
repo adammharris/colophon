@@ -36,17 +36,28 @@
 //! into the eventual public API.
 
 pub mod document;
+pub mod edit;
 pub mod error;
+pub mod exec;
 pub mod fs;
 pub mod identity;
 pub mod index;
+pub mod link;
 pub mod meta;
+pub mod mutate;
 pub mod relation;
+pub mod tree;
+pub mod validate;
 pub mod workspace;
 
 pub use document::{Document, EmbedType};
 pub use error::{Error, Result};
-pub use fs::Storage;
+pub use fig::Format;
+pub use exec::block_on;
+pub use fs::{Storage, StdFs};
+pub use link::Link;
 pub use meta::{Mapping, Value};
 pub use relation::{Cardinality, Edge, Relation, RelationSet};
+pub use tree::{Node, NodeKind};
+pub use validate::Finding;
 pub use workspace::Workspace;
