@@ -26,9 +26,10 @@
 
 use std::path::{Path, PathBuf};
 
-use fig::{Embed, EmbedType, Segment};
+use fig::Segment;
 
-use crate::document::Document;
+use crate::document::{Document, MetaCarrier, whole_file_format};
+use crate::edit::MetaEditor;
 use crate::error::{Error, Result};
 use crate::fs::Storage;
 use crate::identity::{IdentityPolicy, Trigger};
@@ -52,7 +53,17 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             return Err(Error::Structure(format!("{} already exists", path.display())));
         }
         let (parent_text, parent_doc) = self.load(&parent).await?;
-        let kind = parent_doc.embed.unwrap_or(EmbedType::FrontmatterYaml);
+
+        // The new document's carrier: a config extension means a config
+        // document; otherwise inherit the parent's fenced archetype (or the
+        // default YAML frontmatter when the parent is itself a config file).
+        let child_carrier = match whole_file_format(&path) {
+            Some(format) => MetaCarrier::WholeFile(format),
+            None => match parent_doc.carrier {
+                Some(MetaCarrier::Fenced(kind)) => MetaCarrier::Fenced(kind),
+                _ => MetaCarrier::Fenced(fig::EmbedType::FrontmatterYaml),
+            },
+        };
 
         // The new document: title from the file stem, inverse link to parent.
         let title = path
@@ -60,23 +71,23 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let up = link::relative(path.parent().unwrap_or(Path::new("")), &parent);
-        let mut new_doc = Embed::open_or_init(b"", kind)?;
+        let mut new_doc = MetaEditor::open_or_init("", Some(child_carrier))?;
         new_doc.set_value(&[Segment::Key("title")], fig::Value::Str(title))?;
         new_doc.set_value(&[Segment::Key(&inverse)], fig::Value::Str(up))?;
-        let new_text = new_doc.render()?.to_string();
+        let new_text = new_doc.render()?;
 
         // The parent: append the child to its spanning field (creating it if
         // absent — `append` needs an existing sequence).
         let down = link::relative(parent.parent().unwrap_or(Path::new("")), &path);
-        let mut parent_embed = Embed::open_or_init(parent_text.as_bytes(), kind)?;
+        let mut parent_editor = MetaEditor::open_or_init(&parent_text, parent_doc.carrier)?;
         let span_path = [Segment::Key(&spanning)];
-        if parent_embed
+        if parent_editor
             .append_value(&span_path, fig::Value::Str(down.clone()))
             .is_err()
         {
-            parent_embed.set_value(&span_path, fig::Value::Seq(vec![fig::Value::Str(down)]))?;
+            parent_editor.set_value(&span_path, fig::Value::Seq(vec![fig::Value::Str(down)]))?;
         }
-        let parent_out = parent_embed.render()?.to_string();
+        let parent_out = parent_editor.render()?;
 
         if let Some(dir) = self.root().join(&path).parent() {
             self.fs().create_dir_all(dir).await?;
@@ -198,11 +209,12 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let mut parent_write: Option<(PathBuf, String)> = None;
         if let Some(parent) = self.single_target(&doc, &inverse, &path) {
             let (parent_text, parent_doc) = self.load(&parent).await?;
-            let kind = parent_doc.embed.unwrap_or(EmbedType::FrontmatterYaml);
-            if let Some(index) = self.entry_index(&parent_doc, &spanning, &parent, &path) {
-                let mut embed = Embed::open(parent_text.as_bytes(), kind)?;
-                embed.remove_item(&[Segment::Key(&spanning)], index)?;
-                parent_write = Some((parent, embed.render()?.to_string()));
+            if let (Some(index), Some(carrier)) =
+                (self.entry_index(&parent_doc, &spanning, &parent, &path), parent_doc.carrier)
+            {
+                let mut editor = MetaEditor::open(&parent_text, carrier)?;
+                editor.remove_item(&[Segment::Key(&spanning)], index)?;
+                parent_write = Some((parent, editor.render()?));
             }
         }
 
@@ -290,18 +302,20 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             return Ok(None);
         }
         let updated = entry.with_target(link::relative(dir, new));
-        let kind = doc.embed.unwrap_or(EmbedType::FrontmatterYaml);
-        let mut embed = Embed::open(text.as_bytes(), kind)?;
+        let Some(carrier) = doc.carrier else {
+            return Ok(None); // no metadata block: nothing to rewrite
+        };
+        let mut editor = MetaEditor::open(text, carrier)?;
         // A scalar field is addressed by key; a sequence entry by key + index.
         if value.as_sequence().is_some() {
-            embed.replace_value(
+            editor.replace_value(
                 &[Segment::Key(field), Segment::Index(index)],
                 fig::Value::Str(updated.render()),
             )?;
         } else {
-            embed.replace_value(&[Segment::Key(field)], fig::Value::Str(updated.render()))?;
+            editor.replace_value(&[Segment::Key(field)], fig::Value::Str(updated.render()))?;
         }
-        Ok(Some(embed.render()?.to_string()))
+        Ok(Some(editor.render()?))
     }
 }
 
@@ -315,8 +329,10 @@ fn rerelativize(
     from: &Path,
     to: &Path,
 ) -> Result<String> {
-    let kind = doc.embed.unwrap_or(EmbedType::FrontmatterYaml);
-    let mut embed = Embed::open(text.as_bytes(), kind)?;
+    let Some(carrier) = doc.carrier else {
+        return Ok(text.to_string()); // no metadata: nothing to re-relativize
+    };
+    let mut editor = MetaEditor::open(text, carrier)?;
     let new_dir = to.parent().unwrap_or(Path::new(""));
     for relation in relations {
         let Some(value) = doc.meta.get(&relation.name) else {
@@ -333,7 +349,7 @@ fn rerelativize(
         match value {
             Value::String(raw) => {
                 if let Some(updated) = rewrite(raw) {
-                    embed.replace_value(&[Segment::Key(&relation.name)], fig::Value::Str(updated))?;
+                    editor.replace_value(&[Segment::Key(&relation.name)], fig::Value::Str(updated))?;
                 }
             }
             Value::Sequence(items) => {
@@ -341,7 +357,7 @@ fn rerelativize(
                     if let Some(raw) = item.as_str()
                         && let Some(updated) = rewrite(raw)
                     {
-                        embed.replace_value(
+                        editor.replace_value(
                             &[Segment::Key(&relation.name), Segment::Index(i)],
                             fig::Value::Str(updated),
                         )?;
@@ -351,7 +367,7 @@ fn rerelativize(
             _ => {}
         }
     }
-    Ok(embed.render()?.to_string())
+    editor.render()
 }
 
 #[cfg(test)]
@@ -481,8 +497,10 @@ mod tests {
         // Author a link-by-id: register, then write the id target into index.md.
         let id = block_on(w.register(Path::new("a.md"), Trigger::Link)).unwrap();
         let text = read(&dir, "index.md");
+        let carrier = Document::parse("index.md", &text).unwrap().carrier;
         let updated = crate::edit::set_in_text(
             &text,
+            carrier,
             "contents.0",
             fig::Value::Str(link::id_target(&id)),
         )
@@ -517,8 +535,9 @@ mod tests {
         let mut w = id_ws(&dir);
         let id = block_on(w.register(Path::new("a.md"), Trigger::Link)).unwrap();
         let text = read(&dir, "index.md");
+        let carrier = Document::parse("index.md", &text).unwrap().carrier;
         let updated =
-            crate::edit::set_in_text(&text, "contents.0", fig::Value::Str(link::id_target(&id)))
+            crate::edit::set_in_text(&text, carrier, "contents.0", fig::Value::Str(link::id_target(&id)))
                 .unwrap();
         std::fs::write(dir.join("index.md"), &updated).unwrap();
 
@@ -527,8 +546,9 @@ mod tests {
         // before the tombstone landed)… so re-add a dangling reference by hand
         // to simulate the out-of-band case.
         let text = read(&dir, "index.md");
+        let carrier = Document::parse("index.md", &text).unwrap().carrier;
         let updated =
-            crate::edit::set_in_text(&text, "contents", fig::Value::Str(link::id_target(&id)))
+            crate::edit::set_in_text(&text, carrier, "contents", fig::Value::Str(link::id_target(&id)))
                 .unwrap();
         std::fs::write(dir.join("index.md"), &updated).unwrap();
 

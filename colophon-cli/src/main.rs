@@ -19,10 +19,13 @@ use colophon::{
     Workspace, block_on, edit, link, meta,
 };
 
-/// Where the persistent ID registry lives, relative to the workspace root.
-/// User-owned data in the tree, per DESIGN §6 — not an app-private dotfolder
-/// format, just a fig-parseable snapshot anyone can read.
-const INDEX_PATH: &str = ".colophon/index.yaml";
+/// The default registry document the CLI creates on first `colophon id` —
+/// visible, beside the root, and *linked from the root's own metadata* via the
+/// `registry` relation. Where the registry lives is a fact about the
+/// workspace, declared in the workspace; the CLI only supplies this default
+/// when bootstrapping one. (It can equally be a `.md` file whose frontmatter
+/// carries the records — anything the pointer targets.)
+const DEFAULT_REGISTRY: &str = "registry.yaml";
 
 /// A self-describing plaintext workspace, from the command line.
 #[derive(Parser)]
@@ -87,14 +90,15 @@ enum Command {
     },
     /// Print the containment tree that unfolds from a root document.
     Tree {
-        /// The root document to discover from.
-        root: PathBuf,
+        /// The document to discover from (default: the workspace root).
+        root: Option<PathBuf>,
     },
     /// Check workspace integrity from a root: broken links, case mismatches,
-    /// duplicate containment, missing inverse links. Exits 1 on findings.
+    /// duplicate containment, missing inverse links, dangling IDs. Exits 1 on
+    /// findings.
     Check {
-        /// The root document to check from.
-        root: PathBuf,
+        /// The document to check from (default: the workspace root).
+        root: Option<PathBuf>,
     },
     /// Create a document as a child of a parent, linking both directions.
     New {
@@ -122,8 +126,9 @@ enum Command {
         force: bool,
     },
     /// Ensure a document has a stable ID and print its `colophon:<id>` target.
-    /// Registers it in .colophon/index.yaml on first use — link that target
-    /// from any document and it survives moves.
+    /// Registers it in the workspace's registry document (bootstrapping
+    /// registry.yaml + the root's `registry` pointer on first use) — link that
+    /// target from any document and it survives moves.
     Id {
         /// Path to a document.
         file: PathBuf,
@@ -164,8 +169,8 @@ fn main() -> ExitCode {
         Command::Body { file } => cmd_body(&file),
         Command::Set { file, key, value } => cmd_set(&file, &key, &value),
         Command::Unset { file, key } => cmd_unset(&file, &key),
-        Command::Tree { root } => cmd_tree(&root),
-        Command::Check { root } => cmd_check(&root),
+        Command::Tree { root } => cmd_tree(root.as_deref()),
+        Command::Check { root } => cmd_check(root.as_deref()),
         Command::New { path, parent } => cmd_new(&path, &parent),
         Command::Mv { from, to } => cmd_mv(&from, &to),
         Command::Rm { path, force } => cmd_rm(&path, force),
@@ -189,33 +194,159 @@ fn relation_set() -> RelationSet {
     RelationSet::diaryx()
 }
 
-/// The workspace the multi-document commands drive: the process filesystem
-/// rooted at the current directory, a lazy identity policy, and the persistent
-/// registry loaded from [`INDEX_PATH`] (empty when absent — the registry only
-/// materializes on disk once something registers).
-fn workspace() -> Result<Workspace<StdFs, Minter, FileIndex>, Box<dyn std::error::Error>> {
-    let index = match std::fs::read_to_string(INDEX_PATH) {
-        Ok(text) => FileIndex::from_str(&text, Format::Yaml)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileIndex::new(Format::Yaml),
-        Err(e) => return Err(e.into()),
+/// The discovered workspace context: where the root is, which document is the
+/// root, and where the root says the registry lives.
+struct Ctx {
+    /// Absolute path of the workspace root directory.
+    root_dir: PathBuf,
+    /// The root document, relative to `root_dir`.
+    root_doc: PathBuf,
+    /// The registry document the root declares (relative to `root_dir`), if any.
+    registry: Option<PathBuf>,
+}
+
+type AnyError = Box<dyn std::error::Error>;
+
+/// Find the workspace root by walking up from the current directory: in each
+/// directory, a candidate root is a `.md` document with metadata and no
+/// `part_of` (nothing contains it). `index.md` and `README.md` win ties.
+fn find_root() -> Result<Ctx, AnyError> {
+    let cwd = std::env::current_dir()?;
+    for dir in cwd.ancestors() {
+        let mut candidates: Vec<String> = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(doc) = Document::parse(&path, &text) else { continue };
+            if doc.has_meta() && doc.meta.get("part_of").is_none() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    candidates.push(name.to_string());
+                }
+            }
+        }
+        let chosen = ["index.md", "README.md"]
+            .iter()
+            .find(|n| candidates.iter().any(|c| c == *n))
+            .map(|n| n.to_string())
+            .or_else(|| (candidates.len() == 1).then(|| candidates[0].clone()));
+        match chosen {
+            Some(root_doc) => {
+                let root_dir = dir.to_path_buf();
+                let root_doc = PathBuf::from(root_doc);
+                // Ask the root where its registry lives (the pointer relation).
+                let probe: Workspace<StdFs> = Workspace::builder(StdFs).root(&root_dir).build();
+                let registry = block_on(probe.registry_path(&root_doc))?;
+                return Ok(Ctx { root_dir, root_doc, registry });
+            }
+            None if candidates.len() > 1 => {
+                return Err(format!(
+                    "ambiguous workspace root in {}: {} (rename one, or add part_of)",
+                    dir.display(),
+                    candidates.join(", ")
+                )
+                .into());
+            }
+            None => continue,
+        }
+    }
+    Err("no workspace root found: no ancestor directory has a .md document \
+with metadata and no part_of"
+        .into())
+}
+
+/// The workspace the multi-document commands drive: rooted at the discovered
+/// root, a lazy identity policy, and the registry the root declares (an empty
+/// in-memory one when the root declares none — see `ensure_registry`).
+fn workspace(ctx: &Ctx) -> Result<Workspace<StdFs, Minter, FileIndex>, AnyError> {
+    let index = match &ctx.registry {
+        Some(rel) => {
+            let full = ctx.root_dir.join(rel);
+            let text = match std::fs::read_to_string(&full) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(e.into()),
+            };
+            FileIndex::parse(rel, &text)?
+        }
+        None => FileIndex::new(Format::Yaml),
     };
     Ok(Workspace::builder(StdFs)
+        .root(&ctx.root_dir)
         .identity(Minter::lazy(entropy_seed()))
         .index(index)
         .build())
 }
 
-/// Persist the registry when a command changed it.
-fn save_index(ws: &mut Workspace<StdFs, Minter, FileIndex>) -> Result<(), Box<dyn std::error::Error>> {
+/// Make sure the workspace *declares* a registry, bootstrapping one when it
+/// does not: create [`DEFAULT_REGISTRY`] beside the root (self-described with
+/// a title and a part_of back to the root) and add the `registry` pointer to
+/// the root's metadata — comment-preservingly, like any other edit.
+fn ensure_registry(ctx: &mut Ctx) -> Result<(), AnyError> {
+    if ctx.registry.is_some() {
+        return Ok(());
+    }
+    let registry_rel = PathBuf::from(DEFAULT_REGISTRY);
+    let registry_full = ctx.root_dir.join(&registry_rel);
+    if !registry_full.exists() {
+        let mut seed = colophon::Mapping::new();
+        seed.insert("title".into(), Value::String("ID registry".into()));
+        seed.insert(
+            "part_of".into(),
+            Value::String(ctx.root_doc.to_string_lossy().into_owned()),
+        );
+        std::fs::write(&registry_full, meta::serialize_mapping(&seed, Format::Yaml)?)?;
+    }
+    let root_full = ctx.root_dir.join(&ctx.root_doc);
+    let text = std::fs::read_to_string(&root_full)?;
+    let doc = Document::parse(&ctx.root_doc, &text)?;
+    let updated = edit::set_in_text(
+        &text,
+        doc.carrier,
+        "registry",
+        edit::infer_scalar(DEFAULT_REGISTRY),
+    )?;
+    std::fs::write(&root_full, updated)?;
+    eprintln!(
+        "initialized {} (linked from {})",
+        registry_rel.display(),
+        ctx.root_doc.display()
+    );
+    ctx.registry = Some(registry_rel);
+    Ok(())
+}
+
+/// Persist the registry when a command changed it, to wherever the root says
+/// it lives.
+fn save_index(ctx: &Ctx, ws: &mut Workspace<StdFs, Minter, FileIndex>) -> Result<(), AnyError> {
     if !ws.index().is_dirty() {
         return Ok(());
     }
-    if let Some(dir) = Path::new(INDEX_PATH).parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(INDEX_PATH, ws.index().render()?)?;
+    let Some(rel) = &ctx.registry else {
+        return Err("the registry changed but no registry document is declared".into());
+    };
+    let rendered = ws.index_mut().render()?;
+    std::fs::write(ctx.root_dir.join(rel), rendered)?;
     ws.index_mut().mark_clean();
     Ok(())
+}
+
+/// Re-anchor a (cwd-relative) CLI path to the discovered workspace root.
+fn ws_rel(ctx: &Ctx, path: &Path) -> Result<PathBuf, AnyError> {
+    let abs = link::normalize(std::env::current_dir()?.join(path));
+    abs.strip_prefix(&ctx.root_dir)
+        .map(Path::to_path_buf)
+        .map_err(|_| {
+            format!(
+                "{} is outside the workspace root {}",
+                path.display(),
+                ctx.root_dir.display()
+            )
+            .into()
+        })
 }
 
 /// A seed for the minter from OS-seeded hasher state — dependency-free
@@ -297,7 +428,7 @@ fn cmd_meta(file: &Path, format: Option<MetaFormat>) -> CmdResult {
     };
     // Default to the format the document already uses.
     let format = format.map(Format::from).unwrap_or_else(|| {
-        doc.embed.map(|k| k.inner_format()).unwrap_or(Format::Yaml)
+        doc.carrier.map(|c| c.format()).unwrap_or(Format::Yaml)
     });
     print!("{}", meta::serialize_mapping(mapping, format)?);
     Ok(ExitCode::SUCCESS)
@@ -320,7 +451,7 @@ fn cmd_get(file: &Path, key: &str) -> CmdResult {
         Value::Float(f) => println!("{f}"),
         Value::String(s) => println!("{s}"),
         compound => {
-            let format = doc.embed.map(|k| k.inner_format()).unwrap_or(Format::Yaml);
+            let format = doc.carrier.map(|c| c.format()).unwrap_or(Format::Yaml);
             print!("{}", meta::serialize_value(compound, format)?);
         }
     }
@@ -334,21 +465,26 @@ fn cmd_body(file: &Path) -> CmdResult {
 }
 
 fn cmd_set(file: &Path, key: &str, value: &str) -> CmdResult {
-    let text = std::fs::read_to_string(file)?;
-    let updated = edit::set_in_text(&text, key, edit::infer_scalar(value))?;
+    let (text, doc) = load(file)?;
+    let updated = edit::set_in_text(&text, doc.carrier, key, edit::infer_scalar(value))?;
     std::fs::write(file, updated)?;
     Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_unset(file: &Path, key: &str) -> CmdResult {
-    let text = std::fs::read_to_string(file)?;
-    let updated = edit::unset_in_text(&text, key)?;
+    let (text, doc) = load(file)?;
+    let updated = edit::unset_in_text(&text, doc.carrier, key)?;
     std::fs::write(file, updated)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_tree(root: &Path) -> CmdResult {
-    let node = block_on(workspace()?.tree(root))?;
+fn cmd_tree(root: Option<&Path>) -> CmdResult {
+    let ctx = find_root()?;
+    let root = match root {
+        Some(r) => ws_rel(&ctx, r)?,
+        None => ctx.root_doc.clone(),
+    };
+    let node = block_on(workspace(&ctx)?.tree(&root))?;
     print_node(&node, "", true, true);
     Ok(ExitCode::SUCCESS)
 }
@@ -385,8 +521,13 @@ fn print_node(node: &Node, prefix: &str, is_last: bool, is_root: bool) {
     }
 }
 
-fn cmd_check(root: &Path) -> CmdResult {
-    let findings = block_on(workspace()?.check(root))?;
+fn cmd_check(root: Option<&Path>) -> CmdResult {
+    let ctx = find_root()?;
+    let root = match root {
+        Some(r) => ws_rel(&ctx, r)?,
+        None => ctx.root_doc.clone(),
+    };
+    let findings = block_on(workspace(&ctx)?.check(&root))?;
     for finding in &findings {
         println!("{finding}");
     }
@@ -400,39 +541,45 @@ fn cmd_check(root: &Path) -> CmdResult {
 }
 
 fn cmd_new(path: &Path, parent: &Path) -> CmdResult {
-    let mut ws = workspace()?;
-    block_on(ws.create(path, parent))?;
-    save_index(&mut ws)?;
+    let ctx = find_root()?;
+    let mut ws = workspace(&ctx)?;
+    block_on(ws.create(&ws_rel(&ctx, path)?, &ws_rel(&ctx, parent)?))?;
+    save_index(&ctx, &mut ws)?;
     println!("created {} (in {})", path.display(), parent.display());
     Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_mv(from: &Path, to: &Path) -> CmdResult {
-    let mut ws = workspace()?;
-    block_on(ws.rename(from, to))?;
-    save_index(&mut ws)?;
+    let ctx = find_root()?;
+    let mut ws = workspace(&ctx)?;
+    block_on(ws.rename(&ws_rel(&ctx, from)?, &ws_rel(&ctx, to)?))?;
+    save_index(&ctx, &mut ws)?;
     println!("moved {} -> {}", from.display(), to.display());
     Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_rm(path: &Path, force: bool) -> CmdResult {
-    let mut ws = workspace()?;
-    block_on(ws.delete(path, force))?;
-    save_index(&mut ws)?;
+    let ctx = find_root()?;
+    let mut ws = workspace(&ctx)?;
+    block_on(ws.delete(&ws_rel(&ctx, path)?, force))?;
+    save_index(&ctx, &mut ws)?;
     println!("deleted {}", path.display());
     Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_id(file: &Path) -> CmdResult {
-    let mut ws = workspace()?;
-    let id = block_on(ws.register(file, Trigger::Link))?;
-    save_index(&mut ws)?;
+    let mut ctx = find_root()?;
+    ensure_registry(&mut ctx)?;
+    let mut ws = workspace(&ctx)?;
+    let id = block_on(ws.register(&ws_rel(&ctx, file)?, Trigger::Link))?;
+    save_index(&ctx, &mut ws)?;
     println!("{}", link::id_target(&id));
     Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_resolve(id: &str) -> CmdResult {
-    let ws = workspace()?;
+    let ctx = find_root()?;
+    let ws = workspace(&ctx)?;
     let id = Id(id.strip_prefix(link::ID_SCHEME).unwrap_or(id).to_string());
     match ws.index().resolve(&id) {
         Some(path) => {

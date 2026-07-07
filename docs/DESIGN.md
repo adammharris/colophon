@@ -212,6 +212,17 @@ superpowers (stable IDs, backlinks, rename-safety), but the identity state is
 *data the user owns* — in their tree, in any `fig` format, versioned with their
 content. colophon is that vault intelligence as a portable, embeddable library.
 
+Ownership alone is not enough, though: a readable registry in an unlinked
+dotfolder is still `.obsidian/` with a nicer file format. The property that
+actually distinguishes a colophon workspace is **reachability** — the root
+document links its registry through the `registry` relation, so following the
+links from the root discovers the identity state like everything else. Where
+the registry lives is a fact about the workspace, declared in the workspace;
+the registry document self-describes (`title`, `part_of` back to the root) and
+can be a bare config file (`registry.yaml`, fig-native, …) or the frontmatter
+of an ordinary prose document — it is a first-class node, validated by `check`
+like any other link.
+
 ## 7. Serialization and embedded formats
 
 - **`fig` value tree is the common currency.** Access is dynamic (link fields are
@@ -282,7 +293,9 @@ not yet ported.
 | Document splitting (frontmatter fence) | `document` | ✅ all fig archetypes via `fig::detect` (`---`, `;;;`, ```` ```fig ````, endmatter); `EmbedType` recorded per document |
 | Relation vocabulary + edge/child extraction | `relation` | ✅ implemented + tested |
 | Identity policy + registration triggers | `identity` | ✅ betanumeric+check minter (ARK lineage, no shoulder), `Trigger` events, `Workspace::register` (idempotent, policy-gated), mint-by-rejection |
-| Index store (id↔path registry) | `index` | ✅ `NoIndex` + `InMemoryIndex` + persistent `FileIndex` (sorted snapshot, tombstones, any fig format) |
+| Index store (id↔path registry) | `index` | ✅ `NoIndex` + `InMemoryIndex` + persistent `FileIndex` — records live under the `registry` key of a *workspace document* (bare config file or markdown frontmatter alike), tombstones as `id: null`, block layout, per-record preserving upserts |
+| Registry reachability | `relation`/`workspace` | ✅ the root links its registry via the `registry` relation (in the diaryx preset); `Workspace::registry_path` discovers it by following the link — never an app-private sidecar path |
+| Config files as documents | `document`/`edit` | ✅ `.yaml`/`.yml`/`.json`/`.fig`/`.figl` parse as whole-file-metadata documents (`MetaCarrier::WholeFile`); carrier-aware `MetaEditor` edits both shapes preserving comments/format |
 | ID links (`colophon:<id>` targets) | `link`/`tree`/`validate`/`mutate` | ✅ resolve through the registry everywhere paths do; never rewritten by moves (the registry update is the maintenance); findings: `MalformedId` (check char), `DanglingId` (tombstoned vs never-issued) |
 | Workspace composition + builder | `workspace` | ✅ type-flipping builder |
 | Traverse (spanning tree from a root) | `tree` | ✅ `Workspace::tree`; missing/cyclic/unreadable targets are marked nodes |

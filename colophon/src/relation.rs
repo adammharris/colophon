@@ -73,6 +73,7 @@ pub struct Edge {
 pub struct RelationSet {
     relations: Vec<Relation>,
     spanning: Option<String>,
+    registry: Option<String>,
 }
 
 impl RelationSet {
@@ -93,15 +94,28 @@ impl RelationSet {
         self
     }
 
-    /// The diaryx vocabulary: `contents`/`part_of` containment (spanning) plus
-    /// `links`/`link_of` arbitrary cross-references.
+    /// Mark the named relation as the **registry pointer**: the root document
+    /// links its ID registry through this relation, which is what makes the
+    /// registry *reachable* — workspace-critical state discovered by following
+    /// links from the root, like everything else, rather than hidden in an
+    /// app-private sidecar folder.
+    pub fn registry(mut self, name: impl Into<String>) -> Self {
+        self.registry = Some(name.into());
+        self
+    }
+
+    /// The diaryx vocabulary: `contents`/`part_of` containment (spanning),
+    /// `links`/`link_of` arbitrary cross-references, and `registry` (the root's
+    /// pointer to its ID registry document).
     pub fn diaryx() -> Self {
         Self::new()
             .with(Relation::many("contents").inverse("part_of"))
             .with(Relation::one("part_of").inverse("contents"))
             .with(Relation::many("links").inverse("link_of"))
             .with(Relation::many("link_of").inverse("links"))
+            .with(Relation::one("registry"))
             .spanning("contents")
+            .registry("registry")
     }
 
     /// The configured relations.
@@ -112,6 +126,11 @@ impl RelationSet {
     /// The name of the spanning relation, if one is configured.
     pub fn spanning_relation(&self) -> Option<&str> {
         self.spanning.as_deref()
+    }
+
+    /// The name of the registry-pointer relation, if one is configured.
+    pub fn registry_relation(&self) -> Option<&str> {
+        self.registry.as_deref()
     }
 
     /// Extract every link declared by a document's metadata, tagged by relation.

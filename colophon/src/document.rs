@@ -1,16 +1,55 @@
-//! Documents — a plaintext file with an embedded metadata block and a body.
+//! Documents — a plaintext file with an embedded metadata block and a body,
+//! or a config file whose *entire content* is the metadata.
+//!
+//! The two shapes are one model: a config file is simply a document whose
+//! metadata carrier is the whole file and whose body is empty. Both parse to
+//! the same [`Document`], link through the same relations, and participate in
+//! traversal, validation, and mutation identically — which is what lets a
+//! workspace mix prose documents and config documents in one tree.
 
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::meta::{self, Value};
 
-/// The embed archetype a document's metadata block was found in — `---` YAML
-/// frontmatter, `;;;` JSON frontmatter, a ```` ```fig ```` fenced block, or a
-/// trailing ```` ```endmatter ```` block. Re-exported from `fig`, which owns
-/// both detection (`fig::detect`) and the fence/format coupling
-/// ([`EmbedType::inner_format`]).
+/// The embed archetype a fenced metadata block was found in. Re-exported from
+/// `fig`, which owns both detection (`fig::detect`) and the fence/format
+/// coupling ([`EmbedType::inner_format`]).
 pub use fig::EmbedType;
+
+/// Where a document's metadata physically lives — recorded at parse time so a
+/// write can preserve the original carrier exactly (a ```` ```fig ```` block is
+/// never rewritten as `---` YAML; a bare `.yaml` file never grows fences).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetaCarrier {
+    /// A fenced block inside a host file (`---` YAML, `;;;` JSON,
+    /// ```` ```fig ````, endmatter), with the prose body around it.
+    Fenced(EmbedType),
+    /// The entire file is the metadata (a config document); the body is empty.
+    /// The format comes from the file extension.
+    WholeFile(fig::Format),
+}
+
+impl MetaCarrier {
+    /// The format the metadata is written in.
+    pub fn format(&self) -> fig::Format {
+        match self {
+            MetaCarrier::Fenced(kind) => kind.inner_format(),
+            MetaCarrier::WholeFile(format) => *format,
+        }
+    }
+}
+
+/// The whole-file metadata format implied by `path`'s extension, if any.
+/// These are the extensions colophon treats as config documents.
+pub fn whole_file_format(path: &Path) -> Option<fig::Format> {
+    match path.extension()?.to_str()? {
+        "yaml" | "yml" => Some(fig::Format::Yaml),
+        "json" => Some(fig::Format::Json),
+        "fig" | "figl" => Some(fig::Format::Fig),
+        _ => None,
+    }
+}
 
 /// A parsed document: its path, its embedded metadata, and its body text.
 ///
@@ -24,30 +63,43 @@ pub struct Document {
     pub path: PathBuf,
     /// Parsed embedded metadata.
     pub meta: Value,
-    /// Everything outside the metadata block (the host prose).
+    /// Everything outside the metadata block (the host prose). Empty for a
+    /// config document.
     pub body: String,
-    /// The embed archetype the metadata was found in, or `None` when the
-    /// document has no (well-formed) metadata block. Recorded at parse time so
-    /// a write can preserve the original fence style and inner format — a
-    /// ```` ```fig ```` block is never rewritten as `---` YAML.
-    pub embed: Option<EmbedType>,
+    /// Where the metadata was found, or `None` when the document has no
+    /// (well-formed) metadata. Preserved on write.
+    pub carrier: Option<MetaCarrier>,
 }
 
 impl Document {
-    /// Parse a document from its full text. The embedded metadata block is
-    /// auto-detected via `fig::detect` — any archetype fig knows (`---` YAML,
-    /// `;;;` JSON, ```` ```fig ````, ```` ```endmatter ````) — and parsed in
-    /// that archetype's inner format. If there is no (well-formed) block,
-    /// `meta` is [`Value::Null`] and the whole text is the body. An
-    /// unterminated opening fence is treated as no metadata — we do not guess
-    /// where it ends.
+    /// Parse a document from its full text.
+    ///
+    /// If `path` has a config extension (`.yaml`, `.yml`, `.json`, `.fig`,
+    /// `.figl`), the entire text is the metadata and the body is empty.
+    /// Otherwise the embedded metadata block is auto-detected via
+    /// `fig::detect` — any archetype fig knows (`---` YAML, `;;;` JSON,
+    /// ```` ```fig ````, ```` ```endmatter ````) — and parsed in that
+    /// archetype's inner format. If there is no (well-formed) block, `meta`
+    /// is [`Value::Null`] and the whole text is the body. An unterminated
+    /// opening fence is treated as no metadata — we do not guess where it
+    /// ends.
     pub fn parse(path: impl Into<PathBuf>, text: &str) -> Result<Self> {
-        let (meta, body, embed) = match fig::detect(text) {
+        let path = path.into();
+        if let Some(format) = whole_file_format(&path) {
+            let meta = meta::parse_value(text, format)?;
+            return Ok(Self {
+                path,
+                meta,
+                body: String::new(),
+                carrier: Some(MetaCarrier::WholeFile(format)),
+            });
+        }
+        let (meta, body, carrier) = match fig::detect(text) {
             Some(kind) => match fig::split(text, kind) {
                 Some((content, body)) => (
                     meta::parse_value(content, kind.inner_format())?,
                     body.to_owned(),
-                    Some(kind),
+                    Some(MetaCarrier::Fenced(kind)),
                 ),
                 // Detected by its open delimiter but with no matching close:
                 // recognized-but-malformed degrades to "no metadata".
@@ -55,12 +107,7 @@ impl Document {
             },
             None => (Value::Null, text.to_owned(), None),
         };
-        Ok(Self {
-            path: path.into(),
-            meta,
-            body,
-            embed,
-        })
+        Ok(Self { path, meta, body, carrier })
     }
 
     /// The document's path.
@@ -84,7 +131,7 @@ mod tests {
         let doc = Document::parse("index.md", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));
         assert_eq!(doc.body, "# Body\n\nhello\n");
-        assert_eq!(doc.embed, Some(EmbedType::FrontmatterYaml));
+        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterYaml)));
         assert!(doc.has_meta());
     }
 
@@ -97,7 +144,7 @@ mod tests {
             Some("colophon")
         );
         assert_eq!(doc.body, "# Body\n");
-        assert_eq!(doc.embed, Some(EmbedType::FrontmatterFig));
+        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterFig)));
         assert!(doc.has_meta());
     }
 
@@ -106,7 +153,7 @@ mod tests {
         let text = ";;;\n{\"title\": \"Root\"}\n;;;\nbody\n";
         let doc = Document::parse("note.md", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));
-        assert_eq!(doc.embed, Some(EmbedType::FrontmatterJson));
+        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterJson)));
     }
 
     #[test]
@@ -115,7 +162,29 @@ mod tests {
         let doc = Document::parse("note.md", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Tail"));
         assert_eq!(doc.body, "# Body first\n");
-        assert_eq!(doc.embed, Some(EmbedType::EndmatterYaml));
+        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::EndmatterYaml)));
+    }
+
+    #[test]
+    fn a_config_file_is_a_document_whose_content_is_all_metadata() {
+        let text = "title: ID registry\npart_of: index.md\nregistry:\n  abc: a.md\n";
+        let doc = Document::parse("registry.yaml", text).unwrap();
+        assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("ID registry"));
+        assert_eq!(
+            doc.meta.get("part_of").and_then(Value::as_str),
+            Some("index.md")
+        );
+        assert_eq!(doc.body, "");
+        assert_eq!(doc.carrier, Some(MetaCarrier::WholeFile(fig::Format::Yaml)));
+        assert!(doc.has_meta());
+    }
+
+    #[test]
+    fn a_fig_config_file_parses_the_dialect() {
+        let text = "title = settings\npart_of = index.md\n";
+        let doc = Document::parse("settings.figl", text).unwrap();
+        assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("settings"));
+        assert_eq!(doc.carrier, Some(MetaCarrier::WholeFile(fig::Format::Fig)));
     }
 
     #[test]
@@ -123,7 +192,7 @@ mod tests {
         let doc = Document::parse("note.md", "# Just a note\n").unwrap();
         assert!(doc.meta.is_null());
         assert_eq!(doc.body, "# Just a note\n");
-        assert_eq!(doc.embed, None);
+        assert_eq!(doc.carrier, None);
         assert!(!doc.has_meta());
     }
 
@@ -133,14 +202,14 @@ mod tests {
         let doc = Document::parse("x.md", text).unwrap();
         assert!(doc.meta.is_null());
         assert_eq!(doc.body, text);
-        assert_eq!(doc.embed, None);
+        assert_eq!(doc.carrier, None);
     }
 
     #[test]
     fn crlf_fences_are_handled() {
         let text = "---\r\ntitle: Root\r\n---\r\nbody\r\n";
         let doc = Document::parse("x.md", text).unwrap();
-        assert_eq!(doc.embed, Some(EmbedType::FrontmatterYaml));
+        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterYaml)));
         assert_eq!(doc.body, "body\r\n");
         // Exact scalar — fig ≥ 2.1.1 treats \r\n as a single line break.
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));

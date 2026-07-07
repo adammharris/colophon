@@ -113,6 +113,37 @@ impl<FS, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     }
 }
 
+impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
+    /// The registry document this workspace's root declares: the first target
+    /// of the registry-pointer relation on `root_doc`, resolved. `None` when
+    /// the vocabulary has no registry relation or the root does not declare
+    /// one — the workspace simply has no (discoverable) registry.
+    ///
+    /// This is the anti-`.obsidian/` move: where the identity state lives is a
+    /// fact *about the workspace*, declared in the root's own metadata like
+    /// every other link — reachable, validatable, and tool-agnostic — rather
+    /// than an app-private path convention.
+    pub async fn registry_path(&self, root_doc: &Path) -> Result<Option<PathBuf>> {
+        let Some(relation) = self.relations().registry_relation() else {
+            return Ok(None);
+        };
+        let root_doc = link::normalize(root_doc);
+        let (_, doc) = self.load(&root_doc).await?;
+        let Some(raw) = doc
+            .meta
+            .get(relation)
+            .map(crate::meta::Value::link_strings)
+            .and_then(|targets| targets.into_iter().next())
+        else {
+            return Ok(None);
+        };
+        match self.resolve_link(&root_doc, &Link::parse(&raw)) {
+            Target::Path(path) => Ok(Some(path)),
+            _ => Ok(None),
+        }
+    }
+}
+
 impl<FS: Storage, Id: IdentityPolicy, Ix: IndexStore> Workspace<FS, Id, Ix> {
     /// Ensure the document at `path` has a registered stable ID, minting one if
     /// needed, and return it. Idempotent: an already-registered document

@@ -15,12 +15,14 @@
 //! then stays *diagnosable* (validation can say "that document was deleted")
 //! instead of becoming a silent re-resolution hazard.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::document::{Document, MetaCarrier, whole_file_format};
+use crate::edit::MetaEditor;
 use crate::error::Result;
 use crate::identity::Id;
-use crate::meta::{self, Mapping, Value};
+use crate::meta::{Mapping, Value};
 
 /// Somewhere IDs (and eventually derived graph data) are persisted and queried.
 pub trait IndexStore {
@@ -117,15 +119,21 @@ impl IndexStore for InMemoryIndex {
     }
 }
 
-/// The persistent registry: a snapshot with tombstones, (de)serialized through
-/// `fig` so the on-disk format is any the workspace compiles in.
+/// The persistent registry: a snapshot with tombstones, living **under the
+/// `registry` key of a workspace document** — the document the root's
+/// registry-pointer relation targets.
 ///
-/// The rendered shape is designed for clean diffs (DESIGN §5): a single
-/// `registry` section (leaving room for a sibling `derived` section later),
-/// one record per line, sorted by ID. A live record is `id: path`; a tombstone
-/// is `id: null`.
+/// The host document can be either shape (`MetaCarrier`): a bare config file
+/// (`registry.yaml`, `registry.figl`, …) whose whole content is metadata, or a
+/// prose document (`registry.md`) whose fenced frontmatter carries the records.
+/// Writes splice only the `registry` value back through the carrier-aware
+/// editor, so the host's other keys (`title`, `part_of` — the self-description
+/// that makes the registry a first-class node of the tree), its comments
+/// outside the records, its body, and its fence style all survive.
 ///
-/// This type is pure — text in ([`FileIndex::from_str`]), text out
+/// The rendered records are one per line (in YAML hosts), sorted by ID; a live
+/// record is `id: path`, a tombstone is `id: null` (DESIGN §5's diff-friendly
+/// shape). This type is pure — text in ([`FileIndex::parse`]), text out
 /// ([`FileIndex::render`]) — so any storage backend can host it; the caller
 /// owns the I/O and can consult [`is_dirty`](FileIndex::is_dirty) to skip
 /// no-op writes.
@@ -133,34 +141,68 @@ impl IndexStore for InMemoryIndex {
 pub struct FileIndex {
     live: InMemoryIndex,
     tombstones: BTreeSet<Id>,
-    format: fig::Format,
+    /// The host document's full current text and carrier — what `render`
+    /// splices the records back into.
+    host_text: String,
+    carrier: MetaCarrier,
+    /// The record state as currently written in `host_text` — `render` applies
+    /// only the per-record diff against this, as scalar upserts (whole-mapping
+    /// splices cannot round-trip through every carrier; scalars can).
+    persisted: BTreeMap<Id, Option<String>>,
+    /// Whether `host_text` already has a `registry` key. When it does not, the
+    /// first render inserts the whole mapping at once — that is what gets the
+    /// block (one-record-per-line) layout on bare hosts; per-record creation
+    /// would make fig auto-create a flow map.
+    has_registry_key: bool,
     dirty: bool,
 }
 
 impl FileIndex {
-    /// An empty registry that renders to `format`.
+    /// An empty registry hosted by an (empty) bare config document in `format`.
     pub fn new(format: fig::Format) -> Self {
         Self {
             live: InMemoryIndex::new(),
             tombstones: BTreeSet::new(),
-            format,
+            host_text: String::new(),
+            carrier: MetaCarrier::WholeFile(format),
+            persisted: BTreeMap::new(),
+            has_registry_key: false,
             dirty: false,
         }
     }
 
-    /// Parse a registry from its serialized `text` (in `format`). An empty
-    /// text is an empty registry.
-    pub fn from_str(text: &str, format: fig::Format) -> Result<Self> {
-        let mut index = Self::new(format);
-        let top = meta::parse_mapping(text, format)?;
-        if let Some(registry) = top.get("registry").and_then(Value::as_mapping) {
+    /// Parse the registry out of its host document. `path` picks the carrier
+    /// (a config extension means the whole file is metadata; anything else is
+    /// searched for a fenced block); the records are read from the metadata's
+    /// `registry` key. A host with no `registry` key is an empty registry —
+    /// the rest of its metadata is left alone.
+    pub fn parse(path: &Path, text: &str) -> Result<Self> {
+        let doc = Document::parse(path, text)?;
+        let carrier = doc.carrier.unwrap_or_else(|| {
+            // No metadata yet: default by extension, else fresh YAML frontmatter.
+            whole_file_format(path)
+                .map(MetaCarrier::WholeFile)
+                .unwrap_or(MetaCarrier::Fenced(fig::EmbedType::FrontmatterYaml))
+        });
+        let mut index = Self {
+            live: InMemoryIndex::new(),
+            tombstones: BTreeSet::new(),
+            host_text: text.to_string(),
+            carrier,
+            persisted: BTreeMap::new(),
+            has_registry_key: doc.meta.get("registry").is_some(),
+            dirty: false,
+        };
+        if let Some(registry) = doc.meta.get("registry").and_then(Value::as_mapping) {
             for (id, value) in registry {
                 let id = Id(id.clone());
                 match value {
                     Value::Null => {
+                        index.persisted.insert(id.clone(), None);
                         index.tombstones.insert(id);
                     }
                     Value::String(path) => {
+                        index.persisted.insert(id.clone(), Some(path.clone()));
                         index.live.register(&id, Path::new(path));
                     }
                     _ => {
@@ -174,23 +216,85 @@ impl FileIndex {
         Ok(index)
     }
 
-    /// Serialize the registry: sorted, one record per line, tombstones as null.
-    pub fn render(&self) -> Result<String> {
-        let mut records: std::collections::BTreeMap<&Id, Value> = self
-            .tombstones
-            .iter()
-            .map(|id| (id, Value::Null))
-            .collect();
+    /// Render the host document with the current records applied to its
+    /// `registry` key. Each changed record is a *scalar* upsert
+    /// (`registry.<id> = path` / `null`), so everything else in the host —
+    /// title, part_of, comments, body, fences, existing record lines — is
+    /// untouched, whatever the carrier. Records never reorder; new ones land
+    /// in ID order.
+    pub fn render(&mut self) -> Result<String> {
+        let mut current: BTreeMap<Id, Option<String>> = BTreeMap::new();
+        for id in &self.tombstones {
+            current.insert(id.clone(), None);
+        }
         for (id, path) in &self.live.forward {
-            records.insert(id, Value::String(path.to_string_lossy().into_owned()));
+            current.insert(id.clone(), Some(path.to_string_lossy().into_owned()));
         }
-        let mut registry = Mapping::new();
-        for (id, value) in records {
-            registry.insert(id.0.clone(), value);
+        if current == self.persisted {
+            return Ok(self.host_text.clone());
         }
-        let mut top = Mapping::new();
-        top.insert("registry".into(), Value::Mapping(registry));
-        meta::serialize_mapping(&top, self.format)
+
+        // First materialization of the `registry` key.
+        if !self.has_registry_key {
+            let mut registry = Mapping::new();
+            for (id, value) in &current {
+                registry.insert(
+                    id.0.clone(),
+                    value.clone().map(Value::String).unwrap_or(Value::Null),
+                );
+            }
+            let rendered = match self.carrier {
+                // Bare host: rebuild the whole config document (its metadata
+                // plus the new registry mapping) through `serialize_mapping`,
+                // whose block layout gives one record per line. This is the
+                // one write that does not go through the comment-preserving
+                // editor — a fig value splice renders short maps in flow
+                // style, which would freeze the registry inline forever.
+                // Bootstrap hosts are machine-generated, so nothing of note
+                // is lost; afterwards every write is a preserving upsert.
+                MetaCarrier::WholeFile(format) => {
+                    let mut top = crate::meta::parse_mapping(&self.host_text, format)?;
+                    top.insert("registry".into(), Value::Mapping(registry));
+                    crate::meta::serialize_mapping(&top, format)?
+                }
+                // Fenced host: a block map cannot be spliced into the fence
+                // (fig embed limitation), so records land per-key — fig
+                // auto-creates the chain as a flow map. Valid, just inline.
+                MetaCarrier::Fenced(_) => {
+                    let mut editor = MetaEditor::open_or_init(&self.host_text, Some(self.carrier))?;
+                    for (id, value) in &current {
+                        let fig_value =
+                            value.clone().map(fig::Value::Str).unwrap_or(fig::Value::Null);
+                        editor.set_value(
+                            &[fig::Segment::Key("registry"), fig::Segment::Key(id.as_str())],
+                            fig_value,
+                        )?;
+                    }
+                    editor.render()?
+                }
+            };
+            self.host_text = rendered.clone();
+            self.persisted = current;
+            self.has_registry_key = true;
+            return Ok(rendered);
+        }
+
+        // Steady state: per-record comment-preserving upserts of the diff.
+        let mut editor = MetaEditor::open_or_init(&self.host_text, Some(self.carrier))?;
+        for (id, value) in &current {
+            if self.persisted.get(id) == Some(value) {
+                continue;
+            }
+            let fig_value = value.clone().map(fig::Value::Str).unwrap_or(fig::Value::Null);
+            editor.set_value(
+                &[fig::Segment::Key("registry"), fig::Segment::Key(id.as_str())],
+                fig_value,
+            )?;
+        }
+        let rendered = editor.render()?;
+        self.host_text = rendered.clone();
+        self.persisted = current;
+        Ok(rendered)
     }
 
     /// Whether the registry changed since it was parsed/created (i.e. needs a
@@ -309,12 +413,59 @@ mod tests {
         assert!(b < m && m < z, "{text}");
         assert!(text.contains("mmmmmmm: null"), "{text}");
 
-        let back = FileIndex::from_str(&text, fig::Format::Yaml).unwrap();
+        let back = FileIndex::parse(Path::new("registry.yaml"), &text).unwrap();
         assert_eq!(back.resolve(&Id("bcdfghj".into())), Some(PathBuf::from("notes/a.md")));
         assert_eq!(back.resolve(&Id("mmmmmmm".into())), None);
         assert!(back.is_known(&Id("mmmmmmm".into())), "tombstone survives the round-trip");
         assert!(back.is_tombstoned(&Id("mmmmmmm".into())));
         assert!(!back.is_dirty());
+    }
+
+    #[test]
+    fn registry_host_keeps_its_self_description_and_comments() {
+        // A bare config host with a title, a part_of back to the root, and a
+        // comment: splicing records must leave all of that alone.
+        let host = "# who am I? see title
+title: ID registry
+part_of: index.md
+registry:
+  bcdfghj: a.md
+";
+        let mut ix = FileIndex::parse(Path::new("registry.yaml"), host).unwrap();
+        ix.register(&Id("zzzzzzz".into()), Path::new("z.md"));
+        let out = ix.render().unwrap();
+        assert!(out.contains("# who am I? see title"), "{out}");
+        assert!(out.contains("title: ID registry"), "{out}");
+        assert!(out.contains("part_of: index.md"), "{out}");
+        assert!(out.contains("bcdfghj: a.md"), "{out}");
+        assert!(out.contains("zzzzzzz: z.md"), "{out}");
+    }
+
+    #[test]
+    fn registry_can_live_in_markdown_frontmatter() {
+        // The registry embedded in a prose document: records in the fenced
+        // block, body untouched.
+        let host = "---
+title: Registry
+part_of: index.md
+registry:
+  bcdfghj: a.md
+---
+# About this file
+
+The workspace's ID registry lives in my frontmatter.
+";
+        let mut ix = FileIndex::parse(Path::new("registry.md"), host).unwrap();
+        assert_eq!(ix.resolve(&Id("bcdfghj".into())), Some(PathBuf::from("a.md")));
+        ix.set_path(&Id("bcdfghj".into()), Path::new("moved/a.md"));
+        let out = ix.render().unwrap();
+        assert!(out.starts_with("---
+title: Registry"), "fences kept: {out}");
+        assert!(out.contains("bcdfghj: moved/a.md"), "{out}");
+        assert!(out.ends_with("The workspace's ID registry lives in my frontmatter.\n"), "body kept: {out}");
+
+        let back = FileIndex::parse(Path::new("registry.md"), &out).unwrap();
+        assert_eq!(back.resolve(&Id("bcdfghj".into())), Some(PathBuf::from("moved/a.md")));
     }
 
     #[test]
@@ -339,7 +490,7 @@ mod tests {
 
     #[test]
     fn empty_text_is_an_empty_registry() {
-        let ix = FileIndex::from_str("", fig::Format::Yaml).unwrap();
+        let ix = FileIndex::parse(Path::new("registry.yaml"), "").unwrap();
         assert!(ix.is_empty());
     }
 }
