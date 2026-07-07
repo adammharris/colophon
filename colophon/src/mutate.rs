@@ -24,6 +24,7 @@
 //! documents only (no directory moves), and best-effort atomicity (edits are
 //! computed before any write, but writes are not transactional).
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use fig::Segment;
@@ -36,6 +37,7 @@ use crate::identity::{IdentityPolicy, Trigger};
 use crate::index::IndexStore;
 use crate::link::{self, Link};
 use crate::meta::Value;
+use crate::validate::Resolution;
 use crate::workspace::{Target, Workspace};
 
 impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
@@ -104,15 +106,26 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     }
 
     /// Move/rename the document at `from` to `to`, maintaining every affected
-    /// link: the parent's spanning entry, each spanning child's inverse link,
-    /// and — when the directory changes — every relative link the document
-    /// itself declares. Labels on `[label](path)` links are preserved.
-    /// `colophon:<id>` entries pointing at the document are left untouched;
-    /// the registry's `id → path` update keeps them resolving.
+    /// link across the workspace. Every inbound reference that resolves to
+    /// `from` by a path — the parent's spanning entry, each child's inverse,
+    /// overlay `links`, and body `[[…]]` wikilinks, wherever they live — is
+    /// retargeted to `to`; and, when the directory changes, every relative link
+    /// the moved document itself declares (frontmatter and body alike) is
+    /// recomputed. Labels on `[label](path)` links and `[[target|label]]`
+    /// wikilinks are preserved. `colophon:<id>` references are left untouched:
+    /// where a registry is present its `id → path` update keeps them resolving
+    /// (the point of an ID link), and in a path-only (Diaryx-style) workspace
+    /// they never appear.
+    ///
+    /// Inbound references are found by a [`census`](Workspace::census) over the
+    /// spanning tree, whose root is discovered by walking `part_of` up from
+    /// `from` — so the caller supplies no root. References living only in
+    /// documents *unreachable* from that root are not seen (a malformed tree,
+    /// which `check` reports separately).
     pub async fn rename(&mut self, from: &Path, to: &Path) -> Result<()> {
         let from = link::normalize(from);
         let to = link::normalize(to);
-        let (spanning, inverse) = self.spanning_pair()?;
+        let (_spanning, inverse) = self.spanning_pair()?;
 
         if !self.fs().try_exists(&self.root().join(&from)).await? {
             return Err(Error::Structure(format!("{} does not exist", from.display())));
@@ -122,40 +135,39 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         let (from_text, from_doc) = self.load(&from).await?;
 
-        // 1. The parent (via the doc's inverse link): retarget its spanning
-        //    entry for `from` to reach `to`.
-        let mut parent_write: Option<(PathBuf, String)> = None;
-        if let Some(parent) = self.single_target(&from_doc, &inverse, &from) {
-            let (parent_text, parent_doc) = self.load(&parent).await?;
-            if let Some(updated) =
-                self.retarget_entry(&parent_text, &parent_doc, &spanning, &parent, &from, &to)?
-            {
-                parent_write = Some((parent, updated));
+        // 1. Inbound references: census the spanning tree (from its discovered
+        //    root) and collect every document that links *to* `from` by a path.
+        //    This subsumes the parent's spanning entry and each child's inverse,
+        //    and adds overlay `links` and body wikilinks anywhere in the tree.
+        //    Id-form links resolve through the registry and are never rewritten.
+        let root = self.spanning_root(&from, &inverse).await?;
+        let mut sources: BTreeSet<PathBuf> = self
+            .census(&root)
+            .await?
+            .into_iter()
+            .filter(|e| {
+                matches!(&e.resolution,
+                    Resolution::Path(p) | Resolution::CaseMismatch { got: p, .. } if p == &from)
+            })
+            .map(|e| e.source)
+            .collect();
+        sources.remove(&from); // the moved doc's own links are step 2, not inbound
+
+        let mut inbound_writes: Vec<(PathBuf, String)> = Vec::new();
+        for source in sources {
+            if let Some(updated) = self.rewrite_inbound_doc(&source, &from, &to).await? {
+                inbound_writes.push((source, updated));
             }
         }
 
-        // 2. Each spanning child that exists: retarget its inverse link.
-        let mut child_writes: Vec<(PathBuf, String)> = Vec::new();
-        for raw in self.relations().children(&from_doc.meta) {
-            let child = Link::parse(&raw);
-            let child_path = match self.resolve_link(&from, &child) {
-                Target::Path(p) => p,
-                _ => continue,
-            };
-            let Ok((child_text, child_doc)) = self.load(&child_path).await else {
-                continue; // broken link: nothing to maintain, `check` reports it
-            };
-            if let Some(updated) =
-                self.retarget_entry(&child_text, &child_doc, &inverse, &child_path, &from, &to)?
-            {
-                child_writes.push((child_path, updated));
-            }
-        }
-
-        // 3. The document itself: when its directory changes, every relative
-        //    link it declares must be recomputed to keep resolving.
+        // 2. The document itself: when its directory changes, every relative
+        //    link it declares must be recomputed to keep resolving — first the
+        //    frontmatter links, then the body wikilinks (whose spans MetaEditor
+        //    leaves verbatim, so they can be spliced afterwards).
         let self_text = if from.parent() != to.parent() {
-            rerelativize(&from_text, &from_doc, self.relations().relations(), &from, &to)?
+            let meta_rewritten =
+                rerelativize(&from_text, &from_doc, self.relations().relations(), &from, &to)?;
+            rerelativize_body_wikilinks(&meta_rewritten, &from_doc.body, &from, &to)
         } else {
             from_text
         };
@@ -166,11 +178,8 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         self.fs().rename(&self.root().join(&from), &self.root().join(&to)).await?;
         self.fs().write(&self.root().join(&to), self_text.as_bytes()).await?;
-        if let Some((parent, text)) = parent_write {
-            self.fs().write(&self.root().join(&parent), text.as_bytes()).await?;
-        }
-        for (child, text) in child_writes {
-            self.fs().write(&self.root().join(&child), text.as_bytes()).await?;
+        for (source, text) in inbound_writes {
+            self.fs().write(&self.root().join(&source), text.as_bytes()).await?;
         }
 
         // Identity hook — the registry follows the move, so every
@@ -317,6 +326,49 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         Ok(Some(editor.render()?))
     }
+
+    /// Walk `part_of` (the spanning inverse) up from `from` to the spanning
+    /// root — the document nothing contains — so a census can cover `from`'s
+    /// whole workspace. A cycle or an unreadable ancestor stops the walk at the
+    /// last good document, which still roots a scan over `from`'s neighborhood.
+    async fn spanning_root(&self, from: &Path, inverse: &str) -> Result<PathBuf> {
+        let mut current = from.to_path_buf();
+        let mut seen = BTreeSet::new();
+        while seen.insert(current.clone()) {
+            let Ok((_, doc)) = self.load(&current).await else { break };
+            match self.single_target(&doc, inverse, &current) {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        Ok(current)
+    }
+
+    /// Retarget every path-form reference to `from` in the document at `source`
+    /// so it reaches `to`: body wikilinks first (their spans index the current
+    /// body), then each frontmatter relation entry (re-parsing between edits).
+    /// Returns the updated text, or `None` when nothing in `source` pointed at
+    /// `from`. Id-form links are skipped by [`retarget_entry`] and
+    /// [`rewrite_body_inbound`] alike.
+    async fn rewrite_inbound_doc(
+        &self,
+        source: &Path,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Option<String>> {
+        let (original, doc0) = self.load(source).await?;
+        let mut text = rewrite_body_inbound(&original, &doc0.body, source, from, to);
+        let mut doc = if text != original { Document::parse(source, &text)? } else { doc0 };
+        for relation in self.relations().relations() {
+            if let Some(updated) =
+                self.retarget_entry(&text, &doc, &relation.name, source, from, to)?
+            {
+                text = updated;
+                doc = Document::parse(source, &text)?;
+            }
+        }
+        Ok((text != original).then_some(text))
+    }
 }
 
 /// Recompute every relative link `doc` declares so it still resolves after the
@@ -368,6 +420,86 @@ fn rerelativize(
         }
     }
     editor.render()
+}
+
+/// Re-relativize the path-form wikilinks in a moved document's body so they
+/// still resolve from `to`'s directory, then splice the rewritten body back into
+/// `text` (the already-frontmatter-rewritten document). `body` is the moved
+/// document's verbatim prose, which MetaEditor preserved byte-for-byte, so it is
+/// still a contiguous run of `text`. `[[colophon:<id>]]` and external
+/// (`scheme://…`) targets are left alone — neither depends on where the document
+/// lives. Returns `text` unchanged when the body has no rewritable wikilink.
+fn rerelativize_body_wikilinks(text: &str, body: &str, from: &Path, to: &Path) -> String {
+    if body.is_empty() {
+        return text.to_string();
+    }
+    let new_dir = to.parent().unwrap_or(Path::new(""));
+    let mut new_body = String::with_capacity(body.len());
+    let mut cursor = 0;
+    let mut rewrote = false;
+    for wl in link::parse_wikilinks(body) {
+        // ID-form (stable by construction) and external targets stay put; the
+        // text between `cursor` and this span — including any such skipped
+        // wikilink — is copied verbatim by the next span's push (or the tail).
+        if wl.id_target().is_some() || Link::parse(&wl.target).is_external() {
+            continue;
+        }
+        let resolved = link::resolve(from, &wl.target);
+        let retargeted = wl.with_target(link::relative(new_dir, &resolved)).render();
+        new_body.push_str(&body[cursor..wl.span.start]);
+        new_body.push_str(&retargeted);
+        cursor = wl.span.end;
+        rewrote = true;
+    }
+    if !rewrote {
+        return text.to_string();
+    }
+    new_body.push_str(&body[cursor..]);
+    splice_body(text, body, &new_body)
+}
+
+/// Replace the single verbatim occurrence of `old_body` in `text` with
+/// `new_body`. The body sits at one end of the document (a suffix under
+/// frontmatter, a prefix under endmatter, or the whole text when there is no
+/// metadata block), so those cases are matched directly; the general
+/// single-replacement is the fallback.
+fn splice_body(text: &str, old_body: &str, new_body: &str) -> String {
+    if let Some(head) = text.strip_suffix(old_body) {
+        format!("{head}{new_body}")
+    } else if let Some(tail) = text.strip_prefix(old_body) {
+        format!("{new_body}{tail}")
+    } else {
+        text.replacen(old_body, new_body, 1)
+    }
+}
+
+/// Retarget the path-form body wikilinks in `source` that resolve to `from` so
+/// they reach `to` instead, splicing the result back into `text`. ID-form and
+/// external targets are left untouched. Rewrites right-to-left so each span
+/// stays valid as earlier ones are replaced. Returns `text` unchanged when no
+/// body wikilink pointed at `from`.
+fn rewrite_body_inbound(text: &str, body: &str, source: &Path, from: &Path, to: &Path) -> String {
+    if body.is_empty() {
+        return text.to_string();
+    }
+    let source_dir = source.parent().unwrap_or(Path::new(""));
+    let mut new_body = body.to_string();
+    let mut changed = false;
+    for wikilink in link::parse_wikilinks(body).into_iter().rev() {
+        if wikilink.id_target().is_some() || Link::parse(&wikilink.target).is_external() {
+            continue;
+        }
+        if link::resolve(source, &wikilink.target).as_path() != from {
+            continue;
+        }
+        let retargeted = wikilink.with_target(link::relative(source_dir, to)).render();
+        new_body.replace_range(wikilink.span.clone(), &retargeted);
+        changed = true;
+    }
+    if !changed {
+        return text.to_string();
+    }
+    splice_body(text, body, &new_body)
 }
 
 // These engine tests use YAML fixtures throughout, so they run whenever the
@@ -460,6 +592,77 @@ mod tests {
         assert!(mid.contains("- ../leaf.md"), "{mid}");
         assert!(mid.contains("# a comment to preserve"), "{mid}");
         assert!(mid.ends_with("mid body\n"), "{mid}");
+        // The whole workspace still validates.
+        assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn rename_rerelativizes_path_wikilinks_and_spares_id_ones() {
+        // The identity-free (Diaryx-style) half: a moved document's body
+        // wikilinks are maintained by rewriting the path form, while a
+        // `[[colophon:id]]` reference is left exactly as written.
+        let dir = tempdir("wikilink-rerel");
+        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- mid.md\n---\n");
+        write(
+            &dir,
+            "mid.md",
+            "---\npart_of: index.md\n---\nSee [[leaf.md|the leaf]] and [[colophon:ajp7eqb|pinned]].\n",
+        );
+        write(&dir, "leaf.md", "---\ntitle: Leaf\n---\n");
+
+        block_on(ws(&dir).rename(Path::new("mid.md"), Path::new("sub/mid.md"))).unwrap();
+
+        let mid = read(&dir, "sub/mid.md");
+        // Path wikilink re-relativized (label kept) so it still reaches leaf.md.
+        assert!(mid.contains("[[../leaf.md|the leaf]]"), "{mid}");
+        // ID wikilink untouched — location-independent by construction.
+        assert!(mid.contains("[[colophon:ajp7eqb|pinned]]"), "{mid}");
+        // Frontmatter maintenance still holds, and the prose survives verbatim.
+        assert!(mid.contains("part_of: ../index.md"), "{mid}");
+        assert!(mid.ends_with(".\n"), "body preserved: {mid}");
+        // Parent's spanning entry followed the move too.
+        assert!(read(&dir, "index.md").contains("sub/mid.md"), "parent retargeted");
+    }
+
+    #[test]
+    fn same_directory_rename_leaves_body_wikilinks_alone() {
+        // Outbound links resolve from the document's *directory*; a same-dir
+        // rename does not move them, so the body must not churn.
+        let dir = tempdir("wikilink-samedir");
+        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- a.md\n---\n");
+        write(&dir, "a.md", "---\npart_of: index.md\n---\nlink to [[leaf.md]].\n");
+        write(&dir, "leaf.md", "---\ntitle: Leaf\n---\n");
+
+        block_on(ws(&dir).rename(Path::new("a.md"), Path::new("b.md"))).unwrap();
+        assert!(read(&dir, "b.md").contains("[[leaf.md]]"), "unchanged in-place");
+    }
+
+    #[test]
+    fn rename_retargets_overlay_and_body_inbound_links_anywhere() {
+        // A sibling — neither parent nor child of the moved doc — references it
+        // two ways: an overlay `links` relation and a body wikilink. Both must
+        // follow the move; the census finds them where the old local spanning
+        // walk never would. Identity-free: pure Diaryx-style path links.
+        let dir = tempdir("inbound");
+        write(&dir, "index.md", "---\ncontents:\n- a.md\n- b.md\n---\n");
+        write(&dir, "a.md", "---\npart_of: index.md\n---\n");
+        write(
+            &dir,
+            "b.md",
+            "---\npart_of: index.md\nlinks:\n- a.md\n---\nAlso see [[a.md]] nearby.\n",
+        );
+
+        block_on(ws(&dir).rename(Path::new("a.md"), Path::new("sub/a.md"))).unwrap();
+
+        // Parent's spanning entry followed the move (as the old code did too).
+        assert!(read(&dir, "index.md").contains("sub/a.md"), "parent retargeted");
+        let b = read(&dir, "b.md");
+        // Overlay `links` inbound from a sibling — newly maintained.
+        assert!(b.contains("- sub/a.md"), "overlay links retargeted: {b}");
+        // Body wikilink inbound from a sibling — newly maintained.
+        assert!(b.contains("[[sub/a.md]]"), "body wikilink retargeted: {b}");
+        // The moved doc's own inverse re-relativized from its new location.
+        assert!(read(&dir, "sub/a.md").contains("part_of: ../index.md"));
         // The whole workspace still validates.
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }

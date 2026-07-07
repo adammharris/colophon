@@ -108,8 +108,9 @@ enum Command {
         #[arg(long, short)]
         parent: PathBuf,
     },
-    /// Move/rename a document, maintaining every affected link (parent entry,
-    /// children's inverse links, and the document's own relative links).
+    /// Move/rename a document, maintaining every affected link: every inbound
+    /// reference across the workspace (parent entry, children's inverses,
+    /// overlay links, body wikilinks) and the document's own relative links.
     Mv {
         /// Current path.
         from: PathBuf,
