@@ -37,6 +37,7 @@ default = ["yaml"]
 # `lib.rs` enforces this with a `compile_error!`.
 yaml = ["fig/yaml"]
 json = ["fig/json"]
+toml = ["fig/toml"]
 # `fig` is the dependency name, so the native-dialect feature is spelled
 # `fig-lang` (a feature and a dependency may not share a name unambiguously).
 fig-lang = ["fig/fig"]

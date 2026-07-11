@@ -53,6 +53,8 @@ pub fn whole_file_format(path: &Path) -> Option<fig::Format> {
         "yaml" | "yml" => Some(fig::Format::Yaml),
         #[cfg(feature = "json")]
         "json" => Some(fig::Format::Json),
+        #[cfg(feature = "toml")]
+        "toml" => Some(fig::Format::Toml),
         #[cfg(feature = "fig-lang")]
         "fig" | "figl" => Some(fig::Format::Fig),
         _ => None,
@@ -68,6 +70,8 @@ pub fn whole_file_extension(format: fig::Format) -> &'static str {
     match format {
         #[cfg(feature = "json")]
         fig::Format::Json => "json",
+        #[cfg(feature = "toml")]
+        fig::Format::Toml => "toml",
         #[cfg(feature = "fig-lang")]
         fig::Format::Fig => "figl",
         _ => "yaml",
@@ -82,11 +86,109 @@ pub fn frontmatter_carrier(format: fig::Format) -> MetaCarrier {
     let embed = match format {
         #[cfg(feature = "json")]
         fig::Format::Json => EmbedType::FrontmatterJson,
+        #[cfg(feature = "toml")]
+        fig::Format::Toml => EmbedType::PlusToml,
         #[cfg(feature = "fig-lang")]
         fig::Format::Fig => EmbedType::FrontmatterFig,
         _ => EmbedType::FrontmatterYaml,
     };
     MetaCarrier::Fenced(embed)
+}
+
+/// The archetype *family* a workspace authors embedded metadata in — the
+/// "embed type" the CLI's `init` prompts for, one level above the concrete
+/// [`EmbedType`]. A family plus a metadata [`fig::Format`] resolves to a
+/// carrier through [`embed_carrier`]: e.g. (`CodeBlock`, YAML) is a
+/// ```` ```yaml ```` block, (`Delimited`, TOML) is a `+++` block, and
+/// (`Separate`, JSON) is a whole-file `.json` sidecar. It is what the config
+/// document records (via [`WorkspaceConfig`](crate::WorkspaceConfig)) so a
+/// workspace stays self-describing about *how* its metadata is embedded, not
+/// just which format it is written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedStyle {
+    /// Character-delimited frontmatter: `---` YAML, `+++` TOML, `;;;` JSON. A
+    /// Markdown convention; the fig dialect has no delimiter form.
+    Delimited,
+    /// A typed fenced code block — ```` ```yaml ````, ```` ```toml ````,
+    /// ```` ```json ````, ```` ```fig ```` — that renders as a visible block in
+    /// Markdown or Djot.
+    CodeBlock,
+    /// An HTML `<script type="application/…">` data island (not rendered).
+    HtmlScript,
+    /// An HTML `<pre><code class="language-…">` visible code block.
+    HtmlCode,
+    /// Metadata kept in a sibling *whole-file* document, joined to a plain body
+    /// file by a `content` attribute — neither file carries fences.
+    Separate,
+}
+
+impl EmbedStyle {
+    /// The `embed_type` config-document spelling for this style.
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            EmbedStyle::Delimited => "delimited",
+            EmbedStyle::CodeBlock => "code_block",
+            EmbedStyle::HtmlScript => "html_script",
+            EmbedStyle::HtmlCode => "html_code",
+            EmbedStyle::Separate => "separate",
+        }
+    }
+
+    /// Parse an `embed_type` config value. Unknown → `None` (keep the default).
+    pub fn from_config_str(value: &str) -> Option<Self> {
+        Some(match value {
+            "delimited" => EmbedStyle::Delimited,
+            "code_block" => EmbedStyle::CodeBlock,
+            "html_script" => EmbedStyle::HtmlScript,
+            "html_code" => EmbedStyle::HtmlCode,
+            "separate" => EmbedStyle::Separate,
+            _ => return None,
+        })
+    }
+}
+
+/// Resolve an [`EmbedStyle`] + metadata `format` to the carrier a new document
+/// should get. `Separate` maps to a whole-file sidecar in `format`; every other
+/// style maps to the concrete [`EmbedType`] for that `(style, format)` pair.
+/// `None` for a combination that has no archetype — notably `Delimited` + fig
+/// (the dialect has no `---`-style delimiter) and any fenced style paired with a
+/// format fig cannot fence (`Zon`).
+pub fn embed_carrier(style: EmbedStyle, format: fig::Format) -> Option<MetaCarrier> {
+    use EmbedType as E;
+    use fig::Format as F;
+    // JSON's three dialects share one fenced/frontmatter archetype.
+    let is_json = matches!(format, F::Json | F::Jsonc | F::Json5);
+    let kind = match style {
+        EmbedStyle::Separate => return Some(MetaCarrier::WholeFile(format)),
+        EmbedStyle::Delimited => match format {
+            F::Yaml => E::FrontmatterYaml,
+            F::Toml => E::PlusToml,
+            _ if is_json => E::FrontmatterJson,
+            _ => return None,
+        },
+        EmbedStyle::CodeBlock => match format {
+            F::Yaml => E::FencedYaml,
+            F::Toml => E::FencedToml,
+            F::Fig => E::FrontmatterFig,
+            _ if is_json => E::FencedJson,
+            _ => return None,
+        },
+        EmbedStyle::HtmlScript => match format {
+            F::Yaml => E::HtmlScriptYaml,
+            F::Toml => E::HtmlScriptToml,
+            F::Fig => E::HtmlScriptFig,
+            _ if is_json => E::HtmlScriptJson,
+            _ => return None,
+        },
+        EmbedStyle::HtmlCode => match format {
+            F::Yaml => E::HtmlCodeYaml,
+            F::Toml => E::HtmlCodeToml,
+            F::Fig => E::HtmlCodeFig,
+            _ if is_json => E::HtmlCodeJson,
+            _ => return None,
+        },
+    };
+    Some(MetaCarrier::Fenced(kind))
 }
 
 /// A parsed document: its path, its embedded metadata, and its body text.
@@ -238,6 +340,40 @@ mod tests {
         let doc = Document::parse("settings.figl", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("settings"));
         assert_eq!(doc.carrier, Some(MetaCarrier::WholeFile(fig::Format::Fig)));
+    }
+
+    #[test]
+    fn embed_style_config_str_round_trips() {
+        for style in [
+            EmbedStyle::Delimited,
+            EmbedStyle::CodeBlock,
+            EmbedStyle::HtmlScript,
+            EmbedStyle::HtmlCode,
+            EmbedStyle::Separate,
+        ] {
+            assert_eq!(EmbedStyle::from_config_str(style.as_config_str()), Some(style));
+        }
+        assert_eq!(EmbedStyle::from_config_str("nonsense"), None);
+    }
+
+    #[test]
+    fn embed_carrier_resolves_style_and_format_to_a_carrier() {
+        use fig::Format;
+        let fenced = |k| Some(MetaCarrier::Fenced(k));
+        // Delimited: the three delimiter formats, but the fig dialect has none.
+        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Yaml), fenced(EmbedType::FrontmatterYaml));
+        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Toml), fenced(EmbedType::PlusToml));
+        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Json), fenced(EmbedType::FrontmatterJson));
+        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Fig), None);
+        // Code block: fig lands in the ```fig block; the rest in ```lang blocks.
+        assert_eq!(embed_carrier(EmbedStyle::CodeBlock, Format::Fig), fenced(EmbedType::FrontmatterFig));
+        assert_eq!(embed_carrier(EmbedStyle::CodeBlock, Format::Yaml), fenced(EmbedType::FencedYaml));
+        // HTML islands, both shapes.
+        assert_eq!(embed_carrier(EmbedStyle::HtmlScript, Format::Json), fenced(EmbedType::HtmlScriptJson));
+        assert_eq!(embed_carrier(EmbedStyle::HtmlCode, Format::Toml), fenced(EmbedType::HtmlCodeToml));
+        // Separate is a whole-file sidecar in the chosen format (any format).
+        assert_eq!(embed_carrier(EmbedStyle::Separate, Format::Yaml), Some(MetaCarrier::WholeFile(Format::Yaml)));
+        assert_eq!(embed_carrier(EmbedStyle::Separate, Format::Fig), Some(MetaCarrier::WholeFile(Format::Fig)));
     }
 
     #[test]

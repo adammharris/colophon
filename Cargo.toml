@@ -20,7 +20,7 @@ license-file = "MIT or Apache-2.0"
 # features* — see `colophon/Cargo.toml` `[features]`, which forwards `yaml` →
 # `fig/yaml`, etc. This lets a downstream user compile out the formats they don't
 # use (each unused format is a Zig parser/printer left out of `libfig.a`).
-fig = { version = "2.2.0", default-features = false, features = ["serde", "derive", "indexmap"] }
+fig = { version = "2.5.0", default-features = false, features = ["serde", "derive", "indexmap"] }
 indexmap = { version = "2.0", features = ["serde"] }
 thiserror = "2.0"
 

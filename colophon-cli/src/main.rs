@@ -15,10 +15,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use colophon::tree::{Node, NodeKind};
+use colophon::document::MetaCarrier;
 use colophon::{
-    ContentFormat, Document, FileIndex, Format, Id, IndexStore, LinkStyle, Mapping, Minter,
-    Registration, RelationSet, StdFs, Trigger, Value, Workspace, WorkspaceConfig, block_on, edit,
-    link, meta,
+    ContentFormat, Document, EmbedStyle, FileIndex, Format, Id, IndexStore, LinkStyle, Mapping,
+    Minter, Registration, RelationSet, StdFs, Trigger, Value, Workspace, WorkspaceConfig, block_on,
+    edit, link, meta,
 };
 
 /// The filename stem of the registry document the CLI creates on first
@@ -44,6 +45,8 @@ fn sidecar_ext(format: Format) -> &'static str {
     match format {
         #[cfg(feature = "json")]
         Format::Json => "json",
+        #[cfg(feature = "toml")]
+        Format::Toml => "toml",
         #[cfg(feature = "fig-lang")]
         Format::Fig => "figl",
         _ => "yaml",
@@ -79,9 +82,15 @@ enum Command {
         /// Author to record in the root's metadata (default: none).
         #[arg(long)]
         author: Option<String>,
-        /// Metadata (frontmatter) format for the root document (default: yaml).
+        /// Config language for the root's metadata: yaml/toml/json/fig
+        /// (default: yaml). `fig` is unavailable with `--embed delimited`.
         #[arg(long, value_enum)]
         meta: Option<MetaFormat>,
+        /// How that metadata is embedded: delimited, code-block, html-script,
+        /// html-code, or separate. Must suit `--content` (default: the first
+        /// style that content grammar offers).
+        #[arg(long, value_enum)]
+        embed: Option<EmbedArg>,
         /// Body-prose grammar; sets the root file's extension (default: markdown).
         #[arg(long, value_enum)]
         content: Option<ContentLang>,
@@ -233,6 +242,8 @@ enum Command {
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum MetaFormat {
     Yaml,
+    #[cfg(feature = "toml")]
+    Toml,
     #[cfg(feature = "json")]
     Json,
     #[cfg(feature = "fig-lang")]
@@ -244,6 +255,8 @@ impl MetaFormat {
     fn label(self) -> &'static str {
         match self {
             MetaFormat::Yaml => "yaml",
+            #[cfg(feature = "toml")]
+            MetaFormat::Toml => "toml",
             #[cfg(feature = "json")]
             MetaFormat::Json => "json",
             #[cfg(feature = "fig-lang")]
@@ -288,6 +301,60 @@ impl ContentLang {
             ContentLang::Html => "html",
         }
     }
+
+    /// The embed styles `init` offers for this grammar, in menu order (the first
+    /// is the default). Markdown gets delimiters, a fenced block, or a separate
+    /// sidecar; Djot drops delimiters (it has no idiomatic frontmatter, and a
+    /// leading `---`/`+++` is body syntax) and offers a fenced block or separate;
+    /// HTML offers the two data-island shapes; every grammar can keep metadata
+    /// in a sibling file.
+    fn embed_styles(self) -> &'static [EmbedStyle] {
+        match self {
+            ContentLang::Markdown => {
+                &[EmbedStyle::Delimited, EmbedStyle::CodeBlock, EmbedStyle::Separate]
+            }
+            ContentLang::Djot => &[EmbedStyle::CodeBlock, EmbedStyle::Separate],
+            ContentLang::Html => {
+                &[EmbedStyle::HtmlScript, EmbedStyle::HtmlCode, EmbedStyle::Separate]
+            }
+        }
+    }
+
+    /// Whether `style` is a sensible embed for this content grammar — the
+    /// validity check the `--embed` flag is held to (the interactive menu only
+    /// ever offers valid styles).
+    fn allows_embed(self, style: EmbedStyle) -> bool {
+        self.embed_styles().contains(&style)
+    }
+}
+
+/// A menu label + hint for an embed style — the `init` "Embed type" prompt and
+/// the summary line's spelling.
+fn embed_labels(style: EmbedStyle) -> (&'static str, &'static str) {
+    match style {
+        EmbedStyle::Delimited => ("Character delimiters", "--- yaml · +++ toml · ;;; json"),
+        EmbedStyle::CodeBlock => ("Typed code block", "```yaml · ```toml · ```fig"),
+        EmbedStyle::HtmlScript => ("Script tag", "<script type=\"application/…\">"),
+        EmbedStyle::HtmlCode => ("Code tag", "<pre><code class=\"language-…\">"),
+        EmbedStyle::Separate => ("Separate", "metadata in a sibling file"),
+    }
+}
+
+/// The config languages `init` offers for `embed`, compiled-in only. YAML is
+/// always present; TOML/JSON/fig follow their crate features. The fig dialect
+/// has no character-delimiter form, so it is dropped for [`EmbedStyle::Delimited`].
+fn config_languages(embed: EmbedStyle) -> Vec<(MetaFormat, &'static str)> {
+    let _ = embed; // read below only under the `fig-lang` feature
+    let mut opts = vec![(MetaFormat::Yaml, "YAML")];
+    #[cfg(feature = "toml")]
+    opts.push((MetaFormat::Toml, "TOML"));
+    #[cfg(feature = "json")]
+    opts.push((MetaFormat::Json, "JSON"));
+    #[cfg(feature = "fig-lang")]
+    if embed != EmbedStyle::Delimited {
+        opts.push((MetaFormat::Fig, "fig"));
+    }
+    opts
 }
 
 impl From<ContentLang> for ContentFormat {
@@ -296,6 +363,37 @@ impl From<ContentLang> for ContentFormat {
             ContentLang::Markdown => ContentFormat::Markdown,
             ContentLang::Djot => ContentFormat::Djot,
             ContentLang::Html => ContentFormat::Html,
+        }
+    }
+}
+
+/// CLI spelling of the metadata *embed type* ([`colophon::EmbedStyle`]) — how
+/// the metadata is carried in (or beside) the document, one level above the
+/// config language. Which styles make sense depends on the content grammar (see
+/// [`ContentLang::embed_styles`]); the `--embed` flag accepts any and is
+/// validated against the chosen content.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum EmbedArg {
+    /// Character-delimited frontmatter (`---`/`+++`/`;;;`). Markdown only.
+    Delimited,
+    /// A typed fenced code block (```` ```yaml ````, ```` ```fig ````, …).
+    CodeBlock,
+    /// An HTML `<script type="application/…">` data island. HTML only.
+    HtmlScript,
+    /// An HTML `<pre><code class="language-…">` block. HTML only.
+    HtmlCode,
+    /// Metadata in a sibling whole-file document, linked by `content`.
+    Separate,
+}
+
+impl From<EmbedArg> for EmbedStyle {
+    fn from(e: EmbedArg) -> Self {
+        match e {
+            EmbedArg::Delimited => EmbedStyle::Delimited,
+            EmbedArg::CodeBlock => EmbedStyle::CodeBlock,
+            EmbedArg::HtmlScript => EmbedStyle::HtmlScript,
+            EmbedArg::HtmlCode => EmbedStyle::HtmlCode,
+            EmbedArg::Separate => EmbedStyle::Separate,
         }
     }
 }
@@ -350,6 +448,8 @@ impl From<MetaFormat> for Format {
     fn from(f: MetaFormat) -> Format {
         match f {
             MetaFormat::Yaml => Format::Yaml,
+            #[cfg(feature = "toml")]
+            MetaFormat::Toml => Format::Toml,
             #[cfg(feature = "json")]
             MetaFormat::Json => Format::Json,
             #[cfg(feature = "fig-lang")]
@@ -367,8 +467,8 @@ fn main() -> ExitCode {
         Command::Get { file, key } => cmd_get(&file, &key),
         Command::Body { file } => cmd_body(&file),
         Command::Render { file } => cmd_render(&file),
-        Command::Init { dir, title, author, meta, content, link_style, identity, yes } => {
-            cmd_init(dir.as_deref(), title, author, meta, content, link_style, identity, yes)
+        Command::Init { dir, title, author, meta, embed, content, link_style, identity, yes } => {
+            cmd_init(dir.as_deref(), title, author, meta, embed, content, link_style, identity, yes)
         }
         Command::Set { file, key, value } => cmd_set(&file, &key, &value),
         Command::Unset { file, key } => cmd_unset(&file, &key),
@@ -426,12 +526,27 @@ fn find_root() -> Result<Ctx, AnyError> {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
-            let is_root_ext = path
+            let is_content_ext = path
                 .extension()
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| ROOT_EXTS.contains(&e.to_ascii_lowercase().as_str()));
-            if !is_root_ext {
+            // A *separated* root's node is a whole-file metadata document
+            // (`index.yaml`, …) rather than a content file. Accept those too, but
+            // only under the conventional `index`/`readme` stem — otherwise any
+            // stray `.json`/`.yaml`/`.toml` config file in the directory (no
+            // `part_of`, a mapping at its root) would masquerade as a root.
+            let is_meta_ext = colophon::document::whole_file_format(&path).is_some();
+            if !is_content_ext && !is_meta_ext {
                 continue;
+            }
+            if is_meta_ext && !is_content_ext {
+                let stem_ok = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.eq_ignore_ascii_case("index") || s.eq_ignore_ascii_case("readme"));
+                if !stem_ok {
+                    continue;
+                }
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
             let Ok(doc) = Document::parse(&path, &text) else { continue };
@@ -599,24 +714,35 @@ fn load(file: &Path) -> Result<(String, Document), Box<dyn std::error::Error>> {
     Ok((text, doc))
 }
 
-/// The root-document extensions `init` will not overwrite — every content
-/// grammar's `index.*`, so a re-run is caught before it prompts (mirrors the
-/// set `find_root` treats as root candidates).
+/// The body-grammar root extensions `init` will not overwrite (every content
+/// grammar's `index.*`), mirroring the set `find_root` treats as root candidates.
 const ROOT_EXTS: &[&str] = &["md", "markdown", "dj", "djot", "html", "htm"];
 
-/// Initialize a workspace: write a self-describing root document (`index.<ext>`)
-/// so `find_root` can discover it. Each field comes from its flag if given;
-/// otherwise, on a terminal (and without `--yes`), the user is prompted, and in
-/// every other case the default applies (title = directory name, no author,
-/// YAML metadata, Markdown content). The frontmatter block is synthesized by
-/// the same carrier-aware editor `set` uses, so the file is a normal document
-/// from the start.
+/// The whole-file metadata extensions a *separated* root's node can use — the
+/// other half of the already-initialized guard, since a separate workspace's
+/// root is an `index.<meta-ext>` document, not an `index.<content-ext>` one.
+const META_EXTS: &[&str] = &["yaml", "yml", "json", "toml", "figl", "fig"];
+
+/// Initialize a workspace: write a self-describing root the other commands can
+/// discover. Each field comes from its flag if given; otherwise, on a terminal
+/// (and without `--yes`), the user is prompted, and in every other case the
+/// default applies (title = directory name, no author, Markdown content, that
+/// content's first embed style, YAML metadata).
+///
+/// The prompts flow *content → embed type → config language*: the content
+/// grammar decides which embed styles are on offer (Djot has no delimiter form;
+/// HTML uses data islands), and the embed style decides which languages fit
+/// (`fig` has no character-delimiter form). A `separate` embed writes the
+/// metadata as a sibling whole-file node beside a plain body file; every other
+/// style writes a single combined document whose block the carrier-aware editor
+/// synthesizes, so the file is a normal document from the start.
 #[allow(clippy::too_many_arguments)]
 fn cmd_init(
     dir: Option<&Path>,
     title: Option<String>,
     author: Option<String>,
     meta: Option<MetaFormat>,
+    embed: Option<EmbedArg>,
     content: Option<ContentLang>,
     link_style: Option<LinkStyleArg>,
     identity: Option<IdentityArg>,
@@ -631,8 +757,9 @@ fn cmd_init(
     // both for the default title and the confirmation line.
     let dir = dir.canonicalize()?;
 
-    // Bail before prompting if this directory is already a workspace.
-    for ext in ROOT_EXTS {
+    // Bail before prompting if this directory is already a workspace — a root
+    // written by any content grammar (combined) or any metadata format (separate).
+    for ext in ROOT_EXTS.iter().chain(META_EXTS) {
         let existing = dir.join(format!("index.{ext}"));
         if existing.exists() {
             return Err(format!(
@@ -649,8 +776,9 @@ fn cmd_init(
     let prompting = interactive
         && (title.is_none()
             || author.is_none()
-            || meta.is_none()
             || content.is_none()
+            || embed.is_none()
+            || meta.is_none()
             || link_style.is_none()
             || identity.is_none());
     if prompting {
@@ -677,11 +805,7 @@ fn cmd_init(
         }
         None => None,
     };
-    let meta = match meta {
-        Some(m) => m,
-        None if interactive => prompt_meta_format()?,
-        None => MetaFormat::Yaml,
-    };
+    // Content grammar first — it gates the embed styles offered next.
     let content = match content {
         Some(c) => c,
         None if interactive => cliclack::select("Content format")
@@ -691,6 +815,45 @@ fn cmd_init(
             .item(ContentLang::Html, "HTML", ".html")
             .interact()?,
         None => ContentLang::Markdown,
+    };
+    // Embed type — depends on the content grammar.
+    let embed: EmbedStyle = match embed {
+        Some(e) => {
+            let style = EmbedStyle::from(e);
+            if !content.allows_embed(style) {
+                return Err(format!(
+                    "the `{}` embed type does not fit {} content (offered: {})",
+                    style.as_config_str(),
+                    content.label(),
+                    content
+                        .embed_styles()
+                        .iter()
+                        .map(|s| s.as_config_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+                .into());
+            }
+            style
+        }
+        None if interactive => prompt_embed_style(content)?,
+        None => content.embed_styles()[0],
+    };
+    // Config language — depends on the embed type (fig has no delimiter form).
+    let meta: MetaFormat = match meta {
+        Some(m) => {
+            if colophon::embed_carrier(embed, m.into()).is_none() {
+                return Err(format!(
+                    "`{}` metadata cannot be embedded as `{}` (try a code block or separate)",
+                    m.label(),
+                    embed.as_config_str()
+                )
+                .into());
+            }
+            m
+        }
+        None if interactive => prompt_config_language(embed)?,
+        None => MetaFormat::Yaml,
     };
     let link_style = match link_style {
         Some(l) => l,
@@ -720,26 +883,53 @@ fn cmd_init(
         identity: registration,
         id_links,
         default_embed_format: meta.into(),
+        embed_style: embed,
         content_format: content.into(),
     };
 
-    // Write the root document: title, optional author, and a `config` pointer at
-    // the config document we're about to create. Body first, then synthesize the
-    // chosen frontmatter block around it (leading blank line = a conventional gap
-    // after the closing fence).
     let meta_format: Format = meta.into();
     let config_name = sidecar_name(CONFIG_STEM, meta_format);
-    let root_name = format!("index.{}", content.ext());
-    let root = dir.join(&root_name);
-    let carrier = colophon::document::frontmatter_carrier(meta_format);
-    let body = format!("\n{}", content.heading(&title));
-    let mut editor = edit::MetaEditor::open_or_init(&body, Some(carrier))?;
-    editor.set_value(&edit::key_path("title"), edit::infer_scalar(&title))?;
-    if let Some(author) = &author {
-        editor.set_value(&edit::key_path("author"), edit::infer_scalar(author))?;
-    }
-    editor.set_value(&edit::key_path("config"), edit::infer_scalar(&config_name))?;
-    std::fs::write(&root, editor.render()?)?;
+    let content_name = format!("index.{}", content.ext());
+    // The carrier the root's metadata lives in — a fenced block in the content
+    // file, or (for `separate`) a whole-file sibling node. Validated already, so
+    // this never fails here.
+    let carrier = colophon::embed_carrier(embed, meta_format).ok_or_else(|| {
+        format!("`{}` metadata cannot be embedded as `{}`", meta.label(), embed.as_config_str())
+    })?;
+
+    // Write the root, and learn which file is the structural root document (the
+    // node the config's `part_of` points back at, and the `next:` hint names).
+    let root_name = match carrier {
+        // Separate: a plain body file (heading only) plus a whole-file metadata
+        // node that points at it via `content` and carries the same title/author/
+        // config pointer a combined root would embed.
+        MetaCarrier::WholeFile(format) => {
+            let node_name = format!("index.{}", colophon::document::whole_file_extension(format));
+            std::fs::write(dir.join(&content_name), content.heading(&title))?;
+            let mut node = Mapping::new();
+            node.insert("title".into(), Value::String(title.clone()));
+            if let Some(author) = &author {
+                node.insert("author".into(), Value::String(author.clone()));
+            }
+            node.insert("content".into(), Value::String(content_name.clone()));
+            node.insert("config".into(), Value::String(config_name.clone()));
+            std::fs::write(dir.join(&node_name), meta::serialize_mapping(&node, format)?)?;
+            node_name
+        }
+        // Combined: one document, its block synthesized around the body (leading
+        // blank line = the conventional gap after a closing fence).
+        MetaCarrier::Fenced(_) => {
+            let body = format!("\n{}", content.heading(&title));
+            let mut editor = edit::MetaEditor::open_or_init(&body, Some(carrier))?;
+            editor.set_value(&edit::key_path("title"), edit::infer_scalar(&title))?;
+            if let Some(author) = &author {
+                editor.set_value(&edit::key_path("author"), edit::infer_scalar(author))?;
+            }
+            editor.set_value(&edit::key_path("config"), edit::infer_scalar(&config_name))?;
+            std::fs::write(dir.join(&content_name), editor.render()?)?;
+            content_name.clone()
+        }
+    };
 
     // Write the config document beside the root, in the chosen metadata format:
     // self-describing (title + `part_of` back to the root, in the chosen link
@@ -756,11 +946,14 @@ fn cmd_init(
     std::fs::write(dir.join(&config_rel), meta::serialize_mapping(&config_map, meta_format)?)?;
 
     let author_note = author.as_deref().map(|a| format!(", author {a}")).unwrap_or_default();
+    let (embed_label, _) = embed_labels(embed);
     let details = format!(
         "root: {root_name} — {title}{author_note}\n\
-         config: {config_name} — metadata {}, content {}, link style {}, identity {}",
-        meta.label(),
+         config: {config_name} — content {}, embed {} ({}), language {}, link style {}, identity {}",
         content.label(),
+        embed.as_config_str(),
+        embed_label.to_lowercase(),
+        meta.label(),
         ws_config.link_format.as_config_str(),
         identity.label(),
     );
@@ -777,19 +970,26 @@ fn cmd_init(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Prompt for the metadata format, offering only the formats compiled into this
-/// binary (the same set `--meta` and `--format` accept).
-fn prompt_meta_format() -> std::io::Result<MetaFormat> {
-    let mut select = cliclack::select("Metadata format")
-        .initial_value(MetaFormat::Yaml)
-        .item(MetaFormat::Yaml, "YAML", "--- frontmatter");
-    #[cfg(feature = "json")]
-    {
-        select = select.item(MetaFormat::Json, "JSON", ";;; frontmatter");
+/// Prompt for the embed type, offering only the styles that suit `content` (the
+/// first is the default). See [`ContentLang::embed_styles`].
+fn prompt_embed_style(content: ContentLang) -> std::io::Result<EmbedStyle> {
+    let styles = content.embed_styles();
+    let mut select = cliclack::select("Embed type").initial_value(styles[0]);
+    for &style in styles {
+        let (label, hint) = embed_labels(style);
+        select = select.item(style, label, hint);
     }
-    #[cfg(feature = "fig-lang")]
-    {
-        select = select.item(MetaFormat::Fig, "fig", "```fig block");
+    select.interact()
+}
+
+/// Prompt for the config language, offering only the languages compiled into
+/// this binary that fit `embed` (YAML always; TOML/JSON/fig per feature; `fig`
+/// omitted for the delimiter style). See [`config_languages`].
+fn prompt_config_language(embed: EmbedStyle) -> std::io::Result<MetaFormat> {
+    let options = config_languages(embed);
+    let mut select = cliclack::select("Config language").initial_value(options[0].0);
+    for (format, label) in options {
+        select = select.item(format, label, "");
     }
     select.interact()
 }

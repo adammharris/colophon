@@ -21,6 +21,7 @@
 //! [`Workspace`]: crate::workspace::Workspace
 
 use crate::content::ContentFormat;
+use crate::document::EmbedStyle;
 use crate::identity::Registration;
 use crate::link::LinkStyle;
 use crate::meta::{Mapping, Value};
@@ -39,6 +40,13 @@ pub struct WorkspaceConfig {
     /// The metadata format new documents get when they inherit no parent block
     /// — a *default* for authoring, never a workspace constraint (§7).
     pub default_embed_format: fig::Format,
+    /// How that metadata is *embedded* — delimiters, a fenced code block, an
+    /// HTML island, or a separate sidecar. Together with `default_embed_format`
+    /// it selects the carrier a fresh root/document is authored in; recorded so
+    /// the workspace is self-describing about its embedding convention. Like
+    /// `default_embed_format`, an authoring default rather than a constraint:
+    /// existing documents keep whatever carrier they already have.
+    pub embed_style: EmbedStyle,
     /// The body-prose grammar the workspace is authored in (Markdown/Djot/HTML)
     /// — the format `render` and code-aware link scanning assume, and the
     /// intended default for new documents.
@@ -55,6 +63,7 @@ impl Default for WorkspaceConfig {
             identity: Registration::LAZY,
             id_links: false,
             default_embed_format: fig::Format::Yaml,
+            embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
         }
     }
@@ -69,6 +78,7 @@ impl WorkspaceConfig {
             identity: Registration::OFF,
             id_links: false,
             default_embed_format: fig::Format::Yaml,
+            embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
         }
     }
@@ -82,6 +92,7 @@ impl WorkspaceConfig {
             identity: Registration::LAZY,
             id_links: true,
             default_embed_format: fig::Format::Yaml,
+            embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
         }
     }
@@ -108,6 +119,11 @@ impl WorkspaceConfig {
         {
             self.default_embed_format = format;
         }
+        if let Some(style) =
+            meta.get("embed_type").and_then(Value::as_str).and_then(EmbedStyle::from_config_str)
+        {
+            self.embed_style = style;
+        }
         if let Some(content) =
             meta.get("content_format").and_then(Value::as_str).and_then(ContentFormat::from_config_str)
         {
@@ -129,6 +145,7 @@ impl WorkspaceConfig {
         map.insert("identity".into(), Value::String(registration_str(self.identity).into()));
         map.insert("id_links".into(), Value::Bool(self.id_links));
         map.insert("embed_format".into(), Value::String(format_str(self.default_embed_format).into()));
+        map.insert("embed_type".into(), Value::String(self.embed_style.as_config_str().into()));
         map.insert("content_format".into(), Value::String(self.content_format.as_config_str().into()));
         map
     }
@@ -141,6 +158,8 @@ fn format_from_str(value: &str) -> Option<fig::Format> {
         "yaml" | "yml" => Some(fig::Format::Yaml),
         #[cfg(feature = "json")]
         "json" => Some(fig::Format::Json),
+        #[cfg(feature = "toml")]
+        "toml" => Some(fig::Format::Toml),
         #[cfg(feature = "fig-lang")]
         "fig" => Some(fig::Format::Fig),
         _ => None,
@@ -152,6 +171,8 @@ fn format_str(format: fig::Format) -> &'static str {
     match format {
         #[cfg(feature = "json")]
         fig::Format::Json => "json",
+        #[cfg(feature = "toml")]
+        fig::Format::Toml => "toml",
         #[cfg(feature = "fig-lang")]
         fig::Format::Fig => "fig",
         _ => "yaml",
@@ -199,6 +220,7 @@ mod tests {
             identity: Registration::EAGER,
             id_links: true,
             default_embed_format: fig::Format::Yaml,
+            embed_style: EmbedStyle::CodeBlock,
             content_format: ContentFormat::Djot,
         };
         let back = WorkspaceConfig::from_meta(&Value::Mapping(config.to_mapping()));

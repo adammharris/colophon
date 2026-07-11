@@ -43,33 +43,65 @@ use crate::workspace::{Target, Workspace};
 impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     /// Create a new document at `path` (workspace-relative) as a spanning child
     /// of `parent`: the new file declares the inverse link back to `parent`, in
-    /// `parent`'s embed archetype, and `parent`'s spanning field gains `path`.
+    /// `parent`'s embed archetype, and `parent`'s spanning field gains the child.
     /// If the identity policy registers on create, the new document is also
     /// assigned a stable ID.
+    ///
+    /// The child inherits the parent's *shape*. Under a combined parent it is a
+    /// single combined file at `path`. Under a **separated** parent (a whole-file
+    /// metadata node with a `content` pointer) it is a separated pair: `path`
+    /// becomes the prose body and a sibling `path.<meta-ext>` the metadata node
+    /// — the node is the structural document the parent links to and any ID
+    /// registers. A `path` with a whole-file extension is always a bare metadata
+    /// document, whatever the parent.
     pub async fn create(&mut self, path: &Path, parent: &Path) -> Result<()> {
         let path = link::normalize(path);
         let parent = link::normalize(parent);
         let (spanning, inverse) = self.spanning_pair()?;
 
-        if self.fs().try_exists(&self.root().join(&path)).await? {
-            return Err(Error::Structure(format!("{} already exists", path.display())));
-        }
         let (parent_text, parent_doc) = self.load(&parent).await?;
 
-        // The new document's carrier: a config extension means a config
-        // document; otherwise inherit the parent's fenced archetype (or the
-        // default YAML frontmatter when the parent is itself a config file).
-        let child_carrier = match whole_file_format(&path) {
-            Some(format) => MetaCarrier::WholeFile(format),
-            None => match parent_doc.carrier {
-                Some(MetaCarrier::Fenced(kind)) => MetaCarrier::Fenced(kind),
-                _ => crate::document::frontmatter_carrier(self.default_embed_format()),
-            },
-        };
+        // The child's shape follows the parent's. `node` is always the
+        // *structural* document — the file registered, linked by the parent's
+        // spanning entry, and carrying the inverse link; `body`, when present, is
+        // a separated prose file written beside it. Three cases:
+        //  - an explicit whole-file extension on `path` → a bare metadata
+        //    document (config/registry-style node, no body);
+        //  - a *separated* parent (a whole-file node pointing at prose via
+        //    `content`) → a separated child: `path` is the body file and its
+        //    sibling `path.<meta-ext>` the metadata node that points back at it;
+        //  - otherwise → a combined document inheriting the parent's fenced block
+        //    (or the workspace default when the parent is a bare config file).
+        let (node, node_carrier, body): (PathBuf, MetaCarrier, Option<PathBuf>) =
+            match whole_file_format(&path) {
+                Some(format) => (path.clone(), MetaCarrier::WholeFile(format), None),
+                None => match parent_doc.carrier {
+                    Some(MetaCarrier::WholeFile(format)) if parent_doc.content_attr().is_some() => {
+                        let node =
+                            path.with_extension(crate::document::whole_file_extension(format));
+                        (node, MetaCarrier::WholeFile(format), Some(path.clone()))
+                    }
+                    Some(MetaCarrier::Fenced(kind)) => {
+                        (path.clone(), MetaCarrier::Fenced(kind), None)
+                    }
+                    _ => (
+                        path.clone(),
+                        crate::document::frontmatter_carrier(self.default_embed_format()),
+                        None,
+                    ),
+                },
+            };
+
+        // Refuse if either file (the node, or a separated body) already exists.
+        for existing in std::iter::once(&node).chain(body.iter()) {
+            if self.fs().try_exists(&self.root().join(existing)).await? {
+                return Err(Error::Structure(format!("{} already exists", existing.display())));
+            }
+        }
 
         // Titles for the authored links: the child's (from its stem) and the
         // parent's (its own title, else derived from the path).
-        let title = path
+        let title = node
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -83,21 +115,42 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         // The child's inverse link back to the parent — authored in the
         // workspace style (registering the parent when authoring by id, which is
         // safe: the parent exists).
-        let up = self.authored_target(&path, &parent, &parent_title).await?;
-        // The parent's spanning entry for the child. The child is not on disk
-        // yet, so an id link mints its id directly rather than register-by-path.
+        let up = self.authored_target(&node, &parent, &parent_title).await?;
+        // The parent's spanning entry for the child (its structural node). The
+        // node is not on disk yet, so an id link mints its id directly rather
+        // than register-by-path.
         let down = if self.id_links() && self.identity().registration().fires_on(Trigger::Link) {
-            let child_id = self.mint_unique(&path);
-            self.index_mut().register(&child_id, &path);
+            let child_id = self.mint_unique(&node);
+            self.index_mut().register(&child_id, &node);
             link::id_target(&child_id)
         } else {
-            link::format_link(self.link_style(), &parent, &path, &title)
+            link::format_link(self.link_style(), &parent, &node, &title)
         };
 
-        let mut new_doc = MetaEditor::open_or_init("", Some(child_carrier))?;
-        new_doc.set_value(&[Segment::Key("title")], fig::Value::Str(title))?;
-        new_doc.set_value(&[Segment::Key(&inverse)], fig::Value::Str(up))?;
-        let new_text = new_doc.render()?;
+        // Author the node's metadata: title, inverse link, and — for a separated
+        // child — a `content` pointer at its body file. A separated node is
+        // serialized from a mapping (a whole-file document, valid in any format
+        // including empty JSON); a combined child grows its block via the editor.
+        let new_text = match (&node_carrier, &body) {
+            (MetaCarrier::WholeFile(format), Some(body_path)) => {
+                let body_ref = body_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let mut map = crate::meta::Mapping::new();
+                map.insert("title".into(), Value::String(title));
+                map.insert(inverse.clone(), Value::String(up));
+                map.insert("content".into(), Value::String(body_ref));
+                crate::meta::serialize_mapping(&map, *format)?
+            }
+            _ => {
+                let mut new_doc = MetaEditor::open_or_init("", Some(node_carrier))?;
+                new_doc.set_value(&[Segment::Key("title")], fig::Value::Str(title))?;
+                new_doc.set_value(&[Segment::Key(&inverse)], fig::Value::Str(up))?;
+                new_doc.render()?
+            }
+        };
 
         // The parent: append the child to its spanning field (creating it if
         // absent — `append` needs an existing sequence).
@@ -111,19 +164,24 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         let parent_out = parent_editor.render()?;
 
-        if let Some(dir) = self.root().join(&path).parent() {
+        if let Some(dir) = self.root().join(&node).parent() {
             self.fs().create_dir_all(dir).await?;
         }
-        self.fs().write(&self.root().join(&path), new_text.as_bytes()).await?;
+        self.fs().write(&self.root().join(&node), new_text.as_bytes()).await?;
+        // A separated child's prose file starts empty (like a combined child's
+        // body, which is just the synthesized block with nothing after it).
+        if let Some(body_path) = &body {
+            self.fs().write(&self.root().join(body_path), b"").await?;
+        }
         self.fs().write(&self.root().join(&parent), parent_out.as_bytes()).await?;
 
         // Identity hook — eager policies assign an ID from birth (idempotent: an
         // id-linked child was already registered above).
         if self.identity().registration().fires_on(Trigger::Create)
-            && self.index().id_for_path(&path).is_none()
+            && self.index().id_for_path(&node).is_none()
         {
-            let id = self.mint_unique(&path);
-            self.index_mut().register(&id, &path);
+            let id = self.mint_unique(&node);
+            self.index_mut().register(&id, &node);
         }
         Ok(())
     }
@@ -872,6 +930,32 @@ mod tests {
         assert!(read(&dir, "index.md").contains(&format!("colophon:{child_id}")));
         // And it still validates — id targets resolve through the registry.
         assert_eq!(block_on(w.check("index.md")).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn create_makes_a_separated_child_under_a_separated_parent() {
+        // A separated parent is a whole-file metadata node with a `content`
+        // pointer at its prose body. A new child inherits that shape: a body
+        // file plus a sibling metadata node — the node is what the parent links.
+        let dir = tempdir("create-separate");
+        write(&dir, "index.yaml", "title: Root\ncontent: index.md\n");
+        write(&dir, "index.md", "# Root\n");
+
+        block_on(ws(&dir).create(Path::new("notes.md"), Path::new("index.yaml"))).unwrap();
+
+        // The structural node is `notes.yaml`: title, inverse, and a `content`
+        // pointer at its (empty) prose body.
+        let node = read(&dir, "notes.yaml");
+        assert!(node.contains("title: notes"), "{node}");
+        assert!(node.contains("index.yaml"), "inverse link to parent node: {node}");
+        assert!(node.contains("content: notes.md"), "{node}");
+        assert_eq!(read(&dir, "notes.md"), "", "the body file starts empty");
+        // The parent's spanning entry points at the node, never the body file.
+        let index = read(&dir, "index.yaml");
+        assert!(index.contains("notes.yaml"), "{index}");
+        assert!(!index.contains("notes.md"), "parent links the node, not the body: {index}");
+        // The whole (separated) workspace still validates.
+        assert_eq!(block_on(ws(&dir).check("index.yaml")).unwrap(), vec![]);
     }
 
     #[test]

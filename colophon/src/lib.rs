@@ -66,7 +66,7 @@ pub mod workspace;
 pub use config::WorkspaceConfig;
 pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
-pub use document::{Document, EmbedType};
+pub use document::{Document, EmbedStyle, EmbedType, embed_carrier};
 pub use error::{Error, Result};
 pub use exec::block_on;
 pub use fig::Format;
