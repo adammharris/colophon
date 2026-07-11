@@ -148,7 +148,6 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     pub async fn rename(&mut self, from: &Path, to: &Path) -> Result<()> {
         let from = link::normalize(from);
         let to = link::normalize(to);
-        let (_spanning, inverse) = self.spanning_pair()?;
 
         if !self.fs().try_exists(&self.root().join(&from)).await? {
             return Err(Error::Structure(format!("{} does not exist", from.display())));
@@ -158,42 +157,36 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         let (from_text, from_doc) = self.load(&from).await?;
 
-        // 1. Inbound references: census the spanning tree (from its discovered
-        //    root) and collect every document that links *to* `from` by a path.
-        //    This subsumes the parent's spanning entry and each child's inverse,
-        //    and adds overlay `links` and body wikilinks anywhere in the tree.
-        //    Id-form links resolve through the registry and are never rewritten.
-        let root = self.spanning_root(&from, &inverse).await?;
-        let mut sources: BTreeSet<PathBuf> = self
-            .census(&root)
-            .await?
-            .into_iter()
-            .filter(|e| {
-                matches!(&e.resolution,
-                    Resolution::Path(p) | Resolution::CaseMismatch { got: p, .. } if p == &from)
-            })
-            .map(|e| e.source)
-            .collect();
-        sources.remove(&from); // the moved doc's own links are step 2, not inbound
+        // 1. Inbound references: every document that links *to* `from` by a
+        //    path, retargeted to `to` (parent's spanning entry, children's
+        //    inverses, overlay `links`, body wikilinks). Id-form links resolve
+        //    through the registry and are never rewritten.
+        let inbound_writes = self.collect_inbound_rewrites(&from, &to).await?;
 
-        let mut inbound_writes: Vec<(PathBuf, String)> = Vec::new();
-        for source in sources {
-            if let Some(updated) = self.rewrite_inbound_doc(&source, &from, &to).await? {
-                inbound_writes.push((source, updated));
-            }
-        }
+        // A separated document's prose lives in a sibling body file; move it
+        // alongside (and keep the `content` pointer correct) so the pair travels
+        // together.
+        let body_move = self.plan_body_move(&from_doc, &from, &to).await?;
 
         // 2. The document itself: when its directory changes, every relative
         //    link it declares must be recomputed to keep resolving — first the
         //    frontmatter links, then the body wikilinks (whose spans MetaEditor
         //    leaves verbatim, so they can be spliced afterwards).
-        let self_text = if from.parent() != to.parent() {
+        let mut self_text = if from.parent() != to.parent() {
             let meta_rewritten =
                 rerelativize(&from_text, &from_doc, self.relations().relations(), &from, &to)?;
             rerelativize_body_wikilinks(&meta_rewritten, &from_doc.body, &from, &to)
         } else {
             from_text
         };
+        // For a separated node, repoint its `content` to the (moved) body file.
+        if let Some(mv) = &body_move
+            && let Some(carrier) = from_doc.carrier
+        {
+            let mut editor = MetaEditor::open(&self_text, carrier)?;
+            editor.replace_value(&[Segment::Key("content")], fig::Value::Str(mv.new_ref.clone()))?;
+            self_text = editor.render()?;
+        }
 
         // All edits computed; now write.
         if let Some(dir) = self.root().join(&to).parent() {
@@ -201,6 +194,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         self.fs().rename(&self.root().join(&from), &self.root().join(&to)).await?;
         self.fs().write(&self.root().join(&to), self_text.as_bytes()).await?;
+        if let Some(mv) = &body_move {
+            self.fs().rename(&self.root().join(&mv.from), &self.root().join(&mv.to)).await?;
+            self.fs().write(&self.root().join(&mv.to), mv.text.as_bytes()).await?;
+        }
         for (source, text) in inbound_writes {
             self.fs().write(&self.root().join(&source), text.as_bytes()).await?;
         }
@@ -283,7 +280,15 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             }
         }
 
+        // A separated node's body lives in a sibling file; delete the pair.
+        let body_file = content_target(&doc, &path);
+
         self.fs().remove_file(&self.root().join(&path)).await?;
+        if let Some(body) = body_file
+            && self.fs().try_exists(&self.root().join(&body)).await?
+        {
+            self.fs().remove_file(&self.root().join(&body)).await?;
+        }
         if let Some((parent, text)) = parent_write {
             self.fs().write(&self.root().join(&parent), text.as_bytes()).await?;
         }
@@ -294,6 +299,193 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             self.index_mut().unregister(&id);
         }
         Ok(danglers)
+    }
+
+    /// Split the combined document at `path` into two linked plain-text files: a
+    /// whole-file **metadata** document (in the document's own frontmatter
+    /// format) that becomes the structural node, and a **body** file holding its
+    /// prose, joined by a `content` attribute on the metadata file. Every inbound
+    /// link to the document is retargeted to the new metadata file, and a
+    /// registered ID follows it. Returns the metadata file's path. The inverse of
+    /// [`combine`](Workspace::combine).
+    pub async fn separate(&mut self, path: &Path) -> Result<PathBuf> {
+        let path = link::normalize(path);
+        if !self.fs().try_exists(&self.root().join(&path)).await? {
+            return Err(Error::Structure(format!("{} does not exist", path.display())));
+        }
+        let (_, doc) = self.load(&path).await?;
+        let Some(MetaCarrier::Fenced(kind)) = doc.carrier else {
+            return Err(Error::Structure(format!(
+                "{} is not a combined document (nothing to separate)",
+                path.display()
+            )));
+        };
+        if doc.content_attr().is_some() {
+            return Err(Error::Structure(format!("{} is already separated", path.display())));
+        }
+        let Some(mapping) = doc.meta.as_mapping() else {
+            return Err(Error::Structure(format!("{} has no metadata to separate", path.display())));
+        };
+        let format = kind.inner_format();
+        let meta_path = path.with_extension(crate::document::whole_file_extension(format));
+        if meta_path == path {
+            return Err(Error::Structure(format!(
+                "{} already has a metadata-file extension",
+                path.display()
+            )));
+        }
+        if self.fs().try_exists(&self.root().join(&meta_path)).await? {
+            return Err(Error::Structure(format!("{} already exists", meta_path.display())));
+        }
+        let body_ref = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| Error::Structure(format!("{} has no filename", path.display())))?
+            .to_string();
+
+        // The metadata file = the document's mapping + a `content` pointer at the
+        // body file (a sibling, so just its name).
+        let mut map = mapping.clone();
+        map.insert("content".into(), Value::String(body_ref));
+        let meta_text = crate::meta::serialize_mapping(&map, format)?;
+        let body_text = doc.body.clone();
+
+        // Inbound links now point at the metadata file (the structural node).
+        let inbound = self.collect_inbound_rewrites(&path, &meta_path).await?;
+
+        self.fs().write(&self.root().join(&meta_path), meta_text.as_bytes()).await?;
+        self.fs().write(&self.root().join(&path), body_text.as_bytes()).await?;
+        for (source, text) in inbound {
+            self.fs().write(&self.root().join(&source), text.as_bytes()).await?;
+        }
+        if let Some(id) = self.index().id_for_path(&path) {
+            self.index_mut().set_path(&id, &meta_path);
+        }
+        Ok(meta_path)
+    }
+
+    /// Fold the separated document whose metadata file is `path` back into one
+    /// combined file: the body file regains its metadata as frontmatter (in the
+    /// metadata file's format), the metadata file is removed, and inbound links
+    /// are retargeted to the combined file. Returns the combined file's path. The
+    /// inverse of [`separate`](Workspace::separate).
+    pub async fn combine(&mut self, path: &Path) -> Result<PathBuf> {
+        let path = link::normalize(path);
+        let (_, doc) = self.load(&path).await?;
+        let Some(content) = content_target(&doc, &path) else {
+            return Err(Error::Structure(format!(
+                "{} is not a separated document (no `content` attribute)",
+                path.display()
+            )));
+        };
+        let Some(MetaCarrier::WholeFile(format)) = doc.carrier else {
+            return Err(Error::Structure(format!(
+                "{} is not a whole-file metadata document",
+                path.display()
+            )));
+        };
+        let Some(mapping) = doc.meta.as_mapping() else {
+            return Err(Error::Structure(format!("{} has no metadata", path.display())));
+        };
+        if !self.fs().try_exists(&self.root().join(&content)).await? {
+            return Err(Error::Structure(format!(
+                "{}'s content file {} is missing",
+                path.display(),
+                content.display()
+            )));
+        }
+        let (body_raw, body_doc) = self.load(&content).await?;
+        // Normally the body file is pure prose; tolerate a stray frontmatter.
+        let body = match body_doc.carrier {
+            Some(_) => body_doc.body,
+            None => body_raw,
+        };
+
+        // Rebuild the combined document: a fresh frontmatter block (the metadata
+        // format) carrying every key except `content`, then the body.
+        let carrier = crate::document::frontmatter_carrier(format);
+        let mut editor = MetaEditor::open_or_init(&body, Some(carrier))?;
+        for (key, value) in mapping {
+            if key.as_str() == "content" {
+                continue;
+            }
+            editor.set_value(&[Segment::Key(key)], fig::Value::from(value))?;
+        }
+        let combined = editor.render()?;
+
+        // Inbound links point back at the (now combined) content file.
+        let inbound = self.collect_inbound_rewrites(&path, &content).await?;
+
+        self.fs().write(&self.root().join(&content), combined.as_bytes()).await?;
+        self.fs().remove_file(&self.root().join(&path)).await?;
+        for (source, text) in inbound {
+            self.fs().write(&self.root().join(&source), text.as_bytes()).await?;
+        }
+        if let Some(id) = self.index().id_for_path(&path) {
+            self.index_mut().set_path(&id, &content);
+        }
+        Ok(content)
+    }
+
+    /// Every document that links to `from` by a path, rewritten to point at `to`
+    /// — the inbound half of a move. Reused by `rename`, `separate`, and
+    /// `combine`. Id-form links are left untouched (the registry keeps them
+    /// resolving); `from`'s own links are excluded (the mover rewrites those
+    /// itself). Returns `(source_path, new_text)` pairs.
+    async fn collect_inbound_rewrites(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        let (_spanning, inverse) = self.spanning_pair()?;
+        let root = self.spanning_root(from, &inverse).await?;
+        let mut sources: BTreeSet<PathBuf> = self
+            .census(&root)
+            .await?
+            .into_iter()
+            .filter(|e| {
+                matches!(&e.resolution,
+                    Resolution::Path(p) | Resolution::CaseMismatch { got: p, .. } if p == from)
+            })
+            .map(|e| e.source)
+            .collect();
+        sources.remove(from);
+        let mut writes = Vec::new();
+        for source in sources {
+            if let Some(updated) = self.rewrite_inbound_doc(&source, from, to).await? {
+                writes.push((source, updated));
+            }
+        }
+        Ok(writes)
+    }
+
+    /// If `from` is a separated node, plan the move of its body file to sit
+    /// beside `to` (same stem, keeping the body's own extension), with its prose
+    /// wikilinks re-relativized when the directory changes. `None` for a combined
+    /// document.
+    async fn plan_body_move(
+        &self,
+        doc: &Document,
+        from: &Path,
+        to: &Path,
+    ) -> Result<Option<BodyMove>> {
+        let Some(body_from) = content_target(doc, from) else {
+            return Ok(None);
+        };
+        let body_ext = body_from.extension().and_then(|e| e.to_str()).unwrap_or("md");
+        let body_to = to.with_extension(body_ext);
+        let new_ref = body_to
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let (raw, _) = self.load(&body_from).await?;
+        let text = if from.parent() != to.parent() {
+            rerelativize_body_wikilinks(&raw, &raw, &body_from, &body_to)
+        } else {
+            raw
+        };
+        Ok(Some(BodyMove { from: body_from, to: body_to, new_ref, text }))
     }
 
     /// The spanning relation's name and its inverse — mutations need both.
@@ -425,6 +617,28 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         Ok((text != original).then_some(text))
     }
+}
+
+/// A planned move of a separated document's body file, computed during `rename`
+/// (see [`Workspace::plan_body_move`]) and applied in its write phase.
+struct BodyMove {
+    /// The body file's current workspace-relative path.
+    from: PathBuf,
+    /// Where the body file moves to (beside the renamed metadata file).
+    to: PathBuf,
+    /// The metadata file's new `content` value — the body file's basename.
+    new_ref: String,
+    /// The body file's text, wikilinks re-relativized if the directory changed.
+    text: String,
+}
+
+/// The workspace-relative path a document's `content` attribute points at (its
+/// separated body file), resolved against the document's own directory. `None`
+/// for a combined document.
+fn content_target(doc: &Document, doc_path: &Path) -> Option<PathBuf> {
+    let raw = doc.content_attr()?;
+    let dir = doc_path.parent().unwrap_or(Path::new(""));
+    Some(link::normalize(dir.join(raw)))
 }
 
 /// Recompute every relative link `doc` declares so it still resolves after the

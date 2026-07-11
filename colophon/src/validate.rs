@@ -447,6 +447,27 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                     resolution,
                 });
             }
+
+            // A separated document's `content` must resolve to an existing body
+            // file. Validated here (not a graph edge, so kept out of the census).
+            if let Some(content) = doc.content_attr() {
+                let target = link::resolve(&path, content);
+                let site = LinkSite::Relation("content".to_string());
+                match self.exact_name(&target).await {
+                    NameMatch::Exact => {}
+                    NameMatch::CaseOnly(actual) => structural.push(Finding::CaseMismatch {
+                        doc: path.clone(),
+                        site,
+                        target: content.to_string(),
+                        actual,
+                    }),
+                    NameMatch::None => structural.push(Finding::BrokenLink {
+                        doc: path.clone(),
+                        site,
+                        target: content.to_string(),
+                    }),
+                }
+            }
         }
         Ok((census, structural))
     }

@@ -59,6 +59,21 @@ pub fn whole_file_format(path: &Path) -> Option<fig::Format> {
     }
 }
 
+/// The canonical whole-file extension for a metadata `format` — the inverse of
+/// [`whole_file_format`]. Used when materializing a whole-file metadata document
+/// (a config/registry sidecar, or the metadata half of a *separated* document):
+/// `yaml`, `json`, `figl`. A format whose feature is not compiled falls back to
+/// `yaml` (the always-present default).
+pub fn whole_file_extension(format: fig::Format) -> &'static str {
+    match format {
+        #[cfg(feature = "json")]
+        fig::Format::Json => "json",
+        #[cfg(feature = "fig-lang")]
+        fig::Format::Fig => "figl",
+        _ => "yaml",
+    }
+}
+
 /// The fenced-frontmatter carrier for `format` — the archetype a new document
 /// gets when it inherits no parent block and the workspace default is `format`.
 /// A format whose feature is not compiled falls back to YAML frontmatter (which
@@ -141,6 +156,15 @@ impl Document {
     /// `true` if the document declares any embedded metadata mapping.
     pub fn has_meta(&self) -> bool {
         self.meta.as_mapping().is_some()
+    }
+
+    /// The raw `content` attribute — the relative path to a *separated*
+    /// document's body file — or `None` for an ordinary (combined) document
+    /// whose body is [`self.body`](Document::body). A separated document is a
+    /// whole-file metadata document (`.yaml`/`.json`/`.figl`) that points at its
+    /// prose body in a sibling file, keeping both halves plain text and linked.
+    pub fn content_attr(&self) -> Option<&str> {
+        self.meta.get("content").and_then(Value::as_str)
     }
 }
 
