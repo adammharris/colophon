@@ -190,6 +190,18 @@ pub enum Finding {
     /// cannot resolve to one — the fallible edge of title-based linking.
     /// `candidates` are the documents that share the name, sorted.
     AmbiguousAlias { doc: PathBuf, site: LinkSite, name: String, candidates: Vec<PathBuf> },
+    /// A document's self-stored `id` frontmatter disagrees with the registry —
+    /// the portable shadow copy and the registry entry have drifted (an
+    /// out-of-band edit or move). `frontmatter` is the ID the document claims;
+    /// `registry` is the ID the registry records for this path, or `None` when
+    /// the registry instead assigns the claimed ID to a *different* document. A
+    /// reconcile hazard specific to frontmatter storage (DESIGN §5).
+    IdMismatch { doc: PathBuf, frontmatter: Id, registry: Option<Id> },
+    /// A document carries a self-stored `id` the registry has no record of — the
+    /// portable shadow got ahead of the cache (a document copied in with its
+    /// `id`, or a registry rebuilt from a stale snapshot). Reconcilable by
+    /// adopting the id into the registry.
+    UnregisteredId { doc: PathBuf, frontmatter: Id },
 }
 
 impl fmt::Display for Finding {
@@ -235,6 +247,23 @@ impl fmt::Display for Finding {
                 candidates.len(),
                 candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
             ),
+            Finding::IdMismatch { doc, frontmatter, registry } => match registry {
+                Some(reg) => write!(
+                    f,
+                    "{}: id mismatch: frontmatter says id:{frontmatter} but the registry records id:{reg} for this path",
+                    doc.display()
+                ),
+                None => write!(
+                    f,
+                    "{}: id mismatch: frontmatter says id:{frontmatter}, which the registry assigns to another document",
+                    doc.display()
+                ),
+            },
+            Finding::UnregisteredId { doc, frontmatter } => write!(
+                f,
+                "{}: unregistered id: frontmatter says id:{frontmatter} but the registry has no such entry",
+                doc.display()
+            ),
         }
     }
 }
@@ -252,6 +281,14 @@ pub enum Fix {
     /// produced when the fix is applied (which may register `parent`), so the
     /// repair matches how the workspace authors every other link.
     AddInverse { doc: PathBuf, relation: String, parent: PathBuf, title: String },
+    /// Repair a [`Finding::IdMismatch`] by *trusting the registry*: rewrite the
+    /// document's `id` frontmatter to `id` (the ID the registry records for its
+    /// path). The registry is the durable, tombstone-bearing side, so it wins.
+    SetId { doc: PathBuf, id: Id },
+    /// Repair a [`Finding::UnregisteredId`] by adopting the document's self-stored
+    /// `id` into the registry — registering `id` at this path so the cache
+    /// catches up with the shadow.
+    RegisterId { doc: PathBuf, id: Id },
 }
 
 impl fmt::Display for Fix {
@@ -259,6 +296,12 @@ impl fmt::Display for Fix {
         match self {
             Fix::AddInverse { doc, relation, parent, .. } => {
                 write!(f, "declare {relation} → {} in {}", parent.display(), doc.display())
+            }
+            Fix::SetId { doc, id } => {
+                write!(f, "set id:{id} in {} (matching the registry)", doc.display())
+            }
+            Fix::RegisterId { doc, id } => {
+                write!(f, "register id:{id} → {} in the registry", doc.display())
             }
         }
     }
@@ -276,30 +319,44 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     /// native to the workspace. A child that already claims a different parent is
     /// a contested containment and is left alone.
     pub async fn suggest_fix(&self, finding: &Finding) -> Result<Option<Fix>> {
-        let Finding::MissingInverse { doc: parent, child, inverse } = finding else {
-            return Ok(None);
-        };
-        // Safe only when the child makes no other (cardinality-one) parent claim.
-        let (_, child_doc) = self.load(child).await?;
-        if child_doc.meta.get(inverse).is_some() {
-            return Ok(None);
+        match finding {
+            Finding::MissingInverse { doc: parent, child, inverse } => {
+                // Safe only when the child makes no other (cardinality-one) parent claim.
+                let (_, child_doc) = self.load(child).await?;
+                if child_doc.meta.get(inverse).is_some() {
+                    return Ok(None);
+                }
+                // Title the back-link with the parent's own title (else the path),
+                // so a markdown-style repair reads well; the target itself is
+                // produced at apply time, in the workspace's link style (or by id).
+                let (_, parent_doc) = self.load(parent).await?;
+                let title = parent_doc
+                    .meta
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| link::path_to_title(parent));
+                Ok(Some(Fix::AddInverse {
+                    doc: child.clone(),
+                    relation: inverse.clone(),
+                    parent: parent.clone(),
+                    title,
+                }))
+            }
+            // Trust the registry: rewrite the frontmatter to the id it records for
+            // this path. Only when the registry actually names an id for the path;
+            // the `None` case (the id belongs to *another* document) is a genuine
+            // conflict a human must resolve, so it is left as diagnosis.
+            Finding::IdMismatch { doc, registry: Some(reg), .. } => {
+                Ok(Some(Fix::SetId { doc: doc.clone(), id: reg.clone() }))
+            }
+            Finding::IdMismatch { registry: None, .. } => Ok(None),
+            // Adopt the self-stored id into the registry.
+            Finding::UnregisteredId { doc, frontmatter } => {
+                Ok(Some(Fix::RegisterId { doc: doc.clone(), id: frontmatter.clone() }))
+            }
+            _ => Ok(None),
         }
-        // Title the back-link with the parent's own title (else the path), so a
-        // markdown-style repair reads well; the target itself is produced at
-        // apply time, in the workspace's link style (or by id).
-        let (_, parent_doc) = self.load(parent).await?;
-        let title = parent_doc
-            .meta
-            .get("title")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| link::path_to_title(parent));
-        Ok(Some(Fix::AddInverse {
-            doc: child.clone(),
-            relation: inverse.clone(),
-            parent: parent.clone(),
-            title,
-        }))
     }
 
     /// Check the workspace reachable from `start`, returning every finding.
@@ -410,6 +467,39 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                     continue;
                 }
             };
+
+            // Reconcile a self-stored `id` against the registry (frontmatter
+            // storage, DESIGN §5). Three outcomes when a document carries its own
+            // `id`: the registry agrees (nothing to do); the registry records a
+            // *different* id for this path, or hands this id to another document
+            // (`IdMismatch` — a drift); or the registry has never heard of the id
+            // (`UnregisteredId` — the shadow got ahead of the cache).
+            if let Some(fm) = doc.meta.get("id").and_then(Value::as_str)
+                && !fm.trim().is_empty()
+            {
+                let fm = Id(fm.trim().to_string());
+                match self.index().id_for_path(&path) {
+                    Some(reg) if reg != fm => structural.push(Finding::IdMismatch {
+                        doc: path.clone(),
+                        frontmatter: fm,
+                        registry: Some(reg),
+                    }),
+                    Some(_) => {} // the registry agrees with the frontmatter
+                    None => match self.index().resolve(&fm) {
+                        // The id is live, but points at a *different* document.
+                        Some(other) if other != path => structural.push(Finding::IdMismatch {
+                            doc: path.clone(),
+                            frontmatter: fm,
+                            registry: None,
+                        }),
+                        // resolve == this path but no reverse entry: consistent.
+                        Some(_) => {}
+                        // The registry has no record of this id at all.
+                        None => structural
+                            .push(Finding::UnregisteredId { doc: path.clone(), frontmatter: fm }),
+                    },
+                }
+            }
 
             // Frontmatter relation edges — the only links that can be spanning.
             for edge in self.relations().edges(&doc.meta) {
@@ -584,6 +674,17 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 let updated =
                     crate::edit::set_in_text(&text, parsed.carrier, relation, fig::Value::Str(target))?;
                 self.fs().write(&self.root().join(doc), updated.as_bytes()).await?;
+            }
+            // Trust the registry: overwrite the document's `id` frontmatter.
+            Fix::SetId { doc, id } => {
+                let (text, parsed) = self.load(doc).await?;
+                let updated =
+                    crate::edit::set_in_text(&text, parsed.carrier, "id", fig::Value::Str(id.0.clone()))?;
+                self.fs().write(&self.root().join(doc), updated.as_bytes()).await?;
+            }
+            // Adopt the frontmatter id into the registry (a cache update, no doc edit).
+            Fix::RegisterId { doc, id } => {
+                self.index_mut().register(id, doc);
             }
         }
         Ok(())
@@ -909,6 +1010,80 @@ mod tests {
                 .unwrap()
                 .contains(&format!("part_of: id:{parent_id}"))
         );
+    }
+
+    #[test]
+    fn id_mismatch_flags_a_frontmatter_id_disagreeing_with_the_registry() {
+        use crate::identity::Id;
+        use crate::index::IndexStore;
+
+        // A document that carries its own `id` (frontmatter storage, DESIGN §5).
+        let dir = tempdir("id-mismatch");
+        write(&dir, "index.md", "---\ntitle: Home\nid: aaaaaaa\n---\n");
+        let build = || {
+            Workspace::builder(StdFs)
+                .root(&dir)
+                .identity(Minter::lazy(9))
+                .index(FileIndex::new(fig::Format::Yaml))
+                .build()
+        };
+
+        // Registry agrees with the frontmatter → nothing to reconcile.
+        let mut ws = build();
+        ws.index_mut().register(&Id("aaaaaaa".into()), Path::new("index.md"));
+        let clean = block_on(ws.check("index.md")).unwrap();
+        assert!(
+            !clean.iter().any(|f| matches!(f, Finding::IdMismatch { .. })),
+            "agreeing id should not flag: {clean:?}"
+        );
+
+        // Registry records a *different* id for this path → mismatch surfaced.
+        let mut ws = build();
+        ws.index_mut().register(&Id("bbbbbbb".into()), Path::new("index.md"));
+        let findings = block_on(ws.check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(f,
+                Finding::IdMismatch { frontmatter, registry: Some(reg), .. }
+                if frontmatter.0 == "aaaaaaa" && reg.0 == "bbbbbbb")),
+            "expected an IdMismatch: {findings:?}"
+        );
+
+        // Trust-the-registry fix rewrites the frontmatter to the registry's id.
+        let mi = findings.iter().find(|f| matches!(f, Finding::IdMismatch { .. })).unwrap().clone();
+        let fix = block_on(ws.suggest_fix(&mi)).unwrap().unwrap();
+        assert!(matches!(&fix, Fix::SetId { id, .. } if id.0 == "bbbbbbb"));
+        block_on(ws.apply_fix(&fix)).unwrap();
+        assert!(std::fs::read_to_string(dir.join("index.md")).unwrap().contains("id: bbbbbbb"));
+        assert!(block_on(ws.check("index.md")).unwrap().is_empty(), "reconciled → clean");
+    }
+
+    #[test]
+    fn unregistered_id_is_found_and_adopted_into_the_registry() {
+        use crate::identity::Id;
+        use crate::index::IndexStore;
+
+        // A document carries an `id` the (empty) registry has never seen.
+        let dir = tempdir("unregistered-id");
+        write(&dir, "index.md", "---\ntitle: Home\nid: aaaaaaa\n---\n");
+        let mut ws = Workspace::builder(StdFs)
+            .root(&dir)
+            .identity(Minter::lazy(9))
+            .index(FileIndex::new(fig::Format::Yaml))
+            .build();
+
+        let findings = block_on(ws.check("index.md")).unwrap();
+        let f = findings
+            .iter()
+            .find(|f| matches!(f, Finding::UnregisteredId { frontmatter, .. } if frontmatter.0 == "aaaaaaa"))
+            .expect("expected an UnregisteredId")
+            .clone();
+
+        // The fix adopts the self-stored id into the registry.
+        let fix = block_on(ws.suggest_fix(&f)).unwrap().unwrap();
+        assert!(matches!(&fix, Fix::RegisterId { id, .. } if id.0 == "aaaaaaa"));
+        block_on(ws.apply_fix(&fix)).unwrap();
+        assert_eq!(ws.index().id_for_path(Path::new("index.md")), Some(Id("aaaaaaa".into())));
+        assert!(block_on(ws.check("index.md")).unwrap().is_empty(), "adopted → clean");
     }
 
     #[test]

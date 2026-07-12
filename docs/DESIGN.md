@@ -298,7 +298,7 @@ not yet ported.
 | Relation vocabulary + edge/child extraction | `relation` | ✅ implemented + tested |
 | Identity policy + registration triggers | `identity` | ✅ betanumeric+check minter (ARK lineage, no shoulder), `Trigger` events, `Workspace::register` (idempotent, policy-gated), mint-by-rejection |
 | Index store (id↔path registry) | `index` | ✅ `NoIndex` + `InMemoryIndex` + persistent `FileIndex` — records live under the `registry` key of a *workspace document* (bare config file or markdown frontmatter alike), tombstones as `id: null`, block layout, per-record preserving upserts |
-| Identity storage axis (§5 escape hatch) | `config`/`workspace`/CLI | ✅ `IdStorage` = `registry` (default) · `frontmatter` (stamp each doc's own `id` field + keep the registry as a rebuildable cache) · `frontmatter_only` (no registry; id→path rebuilt by `Workspace::scan_ids`, tombstones forfeited). `init` prompts registry vs frontmatter; `--id-storage frontmatter-only` reaches the third. Frontmatter storage makes identity move/copy-robust — the ID travels with the file |
+| Identity storage axis (§5 escape hatch) | `config`/`workspace`/CLI | ✅ `IdStorage` = `frontmatter` (**default**: stamp each doc's own `id` field + keep the registry as a rebuildable cache) · `registry` (only in the registry document) · `frontmatter_only` (no registry; id→path rebuilt by `Workspace::scan_ids`, tombstones forfeited). `init` prompts frontmatter vs registry; `--id-storage frontmatter-only` reaches the third. Frontmatter storage makes identity move/copy-robust — the ID travels with the file |
 | Registry reachability | `relation`/`workspace` | ✅ the root links its registry via the `registry` relation (in the diaryx preset); `Workspace::registry_path` discovers it by following the link — never an app-private sidecar path |
 | Config files as documents | `document`/`edit` | ✅ `.yaml`/`.yml`/`.json`/`.fig`/`.figl` parse as whole-file-metadata documents (`MetaCarrier::WholeFile`); carrier-aware `MetaEditor` edits both shapes preserving comments/format |
 | ID links (`colophon:<id>` targets) | `link`/`tree`/`validate`/`mutate` | ✅ resolve through the registry everywhere paths do; never rewritten by moves (the registry update is the maintenance); findings: `MalformedId` (check char), `DanglingId` (tombstoned vs never-issued) |
@@ -306,7 +306,7 @@ not yet ported.
 | Traverse (spanning tree from a root) | `tree` | ✅ `Workspace::tree`; missing/cyclic/unreadable targets are marked nodes |
 | Scan (directory-driven discovery) | — | ⏳ waits on `StructureSource` |
 | Mutation with link maintenance | `mutate` | ✅ first cut: `create`/`rename`/`delete` (parent entry, inverse links, re-relativization, labels kept; fig `Embed` edits). Remaining diaryx ops ⏳ |
-| Validation | `validate` | ✅ findings: broken link, case mismatch, duplicate containment, missing inverse, unreadable. Autofix ⏳ |
+| Validation | `validate` | ✅ findings: broken link, case mismatch, duplicate containment, missing inverse, unreadable, malformed/dangling id, ambiguous alias, **id mismatch** + **unregistered id** (the frontmatter-storage reconcile pair). Autofix: missing inverse ✅; id mismatch → trust the registry (rewrite frontmatter) ✅; unregistered id → adopt into the registry ✅; body-link findings stay diagnosis-only |
 | Storage adapter + executor | `fs`, `exec` | ✅ `StdFs` + dependency-free `block_on` |
 | Link text + path arithmetic | `link` | ✅ labeled links, resolve/relative, lexical normalize |
 | Single-document edits | `edit` | ✅ format-preserving `set`/`unset` over text |

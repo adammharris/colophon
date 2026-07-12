@@ -114,10 +114,10 @@ enum Command {
         /// link-by-id or publish), or eager (at creation) (default: lazy).
         #[arg(long, value_enum)]
         identity: Option<IdentityArg>,
-        /// Where IDs live: registry (only in the registry document), frontmatter
-        /// (also stamped into each document's `id` field, registry kept as a
-        /// cache), or frontmatter-only (no registry document — self-describing,
-        /// but no tombstones) (default: registry).
+        /// Where IDs live: frontmatter (stamped into each document's `id` field,
+        /// with the registry kept as a cache), registry (only in the registry
+        /// document), or frontmatter-only (no registry document — self-describing,
+        /// but no tombstones) (default: frontmatter).
         #[arg(long, value_enum)]
         id_storage: Option<IdStorageArg>,
         /// Accept every default without prompting.
@@ -1203,7 +1203,7 @@ fn cmd_init(
         match id_storage {
             Some(s) => s,
             None if interactive => prompt_id_storage()?,
-            None => IdStorageArg::Registry,
+            None => IdStorageArg::Frontmatter,
         }
     };
 
@@ -1374,13 +1374,13 @@ fn prompt_reference(identity: IdentityArg, wrapper: WrapperArg) -> std::io::Resu
 /// here; it forfeits tombstones and is reachable only via `--id-storage`.
 fn prompt_id_storage() -> std::io::Result<IdStorageArg> {
     cliclack::select("Where IDs are stored")
-        .initial_value(IdStorageArg::Registry)
-        .item(IdStorageArg::Registry, "Registry only", "IDs live in one registry document")
+        .initial_value(IdStorageArg::Frontmatter)
         .item(
             IdStorageArg::Frontmatter,
             "In each file (+ registry)",
             "each document carries its own `id`; portable, travels with the file",
         )
+        .item(IdStorageArg::Registry, "Registry only", "IDs live in one registry document")
         .interact()
 }
 
@@ -1599,7 +1599,7 @@ fn print_node(node: &Node, prefix: &str, is_last: bool, is_root: bool) {
 }
 
 fn cmd_check(root: Option<&Path>, fix: bool) -> CmdResult {
-    let ctx = find_root()?;
+    let mut ctx = find_root()?;
     let root = match root {
         Some(r) => ws_rel(&ctx, r)?,
         None => ctx.root_doc.clone(),
@@ -1607,7 +1607,7 @@ fn cmd_check(root: Option<&Path>, fix: bool) -> CmdResult {
     let mut ws = workspace(&ctx)?;
     let findings = block_on(ws.check(&root))?;
     if fix {
-        return cmd_check_fix(&mut ws, &findings);
+        return cmd_check_fix(&mut ctx, &mut ws, &findings);
     }
     for finding in &findings {
         println!("{finding}");
@@ -1626,6 +1626,7 @@ fn cmd_check(root: Option<&Path>, fix: bool) -> CmdResult {
 /// printed as needing attention. `suggest_fix` is consulted lazily, so a fix
 /// applied to one document correctly declines a now-stale finding later.
 fn cmd_check_fix(
+    ctx: &mut Ctx,
     ws: &mut Workspace<StdFs, Minter, FileIndex>,
     findings: &[colophon::Finding],
 ) -> CmdResult {
@@ -1657,6 +1658,12 @@ fn cmd_check_fix(
             block_on(ws.apply_fix(&fix))?;
             applied += 1;
         }
+    }
+    // A fix may have registered an ID (an adopted `id`, or an id-link back-link):
+    // make sure a registry exists and persist the identity changes to disk.
+    if applied > 0 {
+        ensure_registry(ctx)?;
+        persist(ctx, ws)?;
     }
     println!("applied {applied} fix(es); {needs_attention} finding(s) need attention");
     Ok(ExitCode::SUCCESS)

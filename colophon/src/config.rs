@@ -49,14 +49,15 @@ pub struct RelationStyleConfig {
 /// how references are spelled; this is purely the ID's *home*.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IdStorage {
-    /// **Model B, registry only** (the default): IDs live solely in the registry
-    /// document — authoritative, non-derivable, resolved by direct lookup.
-    #[default]
+    /// **Registry only**: IDs live solely in the registry document —
+    /// authoritative, non-derivable, resolved by direct lookup. The cleanest
+    /// documents (no `id` clutter), but identity does not travel with a file.
     Registry,
-    /// **Model B's escape hatch**: each document also carries its own ID in an
-    /// `id` frontmatter field (a portable, self-describing shadow), and the
-    /// registry is retained as a rebuildable cache + tombstone ledger. The ID
-    /// travels with the file across copies and out-of-band moves.
+    /// **Frontmatter + registry cache** (the default): each document also carries
+    /// its own ID in an `id` frontmatter field (a portable, self-describing
+    /// shadow), and the registry is retained as a rebuildable cache + tombstone
+    /// ledger. The ID travels with the file across copies and out-of-band moves.
+    #[default]
     Frontmatter,
     /// **Frontmatter only**: the `id` field is the sole home; no registry
     /// document is written and resolution rebuilds the id→path map by scanning
@@ -158,7 +159,7 @@ impl Default for WorkspaceConfig {
             reference_target: None,
             reference_label: None,
             relation_styles: BTreeMap::new(),
-            id_storage: IdStorage::Registry,
+            id_storage: IdStorage::Frontmatter,
             default_embed_format: fig::Format::Yaml,
             embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
