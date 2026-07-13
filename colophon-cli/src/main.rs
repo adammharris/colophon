@@ -1198,6 +1198,33 @@ fn pick_root_candidate(docs: &[FoundDoc]) -> Option<PathBuf> {
         .or_else(|| (candidates.len() == 1).then(|| candidates[0].clone()))
 }
 
+/// Ask which top-level document should become the workspace root, or offer to
+/// synthesize a fresh index. Returns the chosen document (relative to the init
+/// directory), or `None` to create a new index. Only offered interactively when
+/// loose top-level documents exist.
+fn prompt_root_choice(docs: &[PathBuf]) -> Result<Option<PathBuf>, AnyError> {
+    let mut sel = cliclack::select("Which file should be the workspace root?");
+    for d in docs {
+        let name = d.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        sel = sel.item(d.clone(), name, "adopt this document as the root");
+    }
+    // The empty path is the "create a new index" sentinel.
+    sel = sel.item(PathBuf::new(), "Create a new index", "synthesize a fresh root document");
+    let choice = sel.interact()?;
+    Ok((!choice.as_os_str().is_empty()).then_some(choice))
+}
+
+/// The title an existing document declares (its `title` frontmatter), or a title
+/// derived from its filename — used when an existing document is adopted as the
+/// root, so the config link and summary read naturally without a title prompt.
+fn existing_doc_title(root_dir: &Path, rel: &Path) -> String {
+    std::fs::read_to_string(root_dir.join(rel))
+        .ok()
+        .and_then(|t| Document::parse(rel, &t).ok())
+        .and_then(|d| d.meta.get("title").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_else(|| link::path_to_title(rel))
+}
+
 /// The direct children of one directory, categorized for the interactive intake
 /// walk: plaintext `docs`, opaque `others` (attachment candidates), and `subdirs`
 /// — all workspace-relative, sorted, hidden entries skipped. Non-recursive: the
@@ -1556,14 +1583,29 @@ fn cmd_init(
         cliclack::intro("colophon init")?;
     }
 
-    // Each field: flag wins; else prompt when interactive; else the default.
-    let title = match title {
-        Some(t) if !t.is_empty() => t,
-        _ if interactive => cliclack::input("Title")
-            .default_input(&default_title)
-            .placeholder(&default_title)
-            .interact::<String>()?,
-        _ => default_title,
+    // Root selection (the walk's first step): adopt one of the directory's own
+    // top-level documents as the root, or synthesize a fresh index. Offered only
+    // when loose documents are present to choose from.
+    let root_pick: Option<PathBuf> = if use_walk {
+        let top_docs = dir_listing(&dir, Path::new("")).docs;
+        if top_docs.is_empty() { None } else { prompt_root_choice(&top_docs)? }
+    } else {
+        None
+    };
+
+    // Each field: flag wins; else prompt when interactive; else the default. An
+    // adopted existing root carries its own title, so that prompt is skipped.
+    let title = if let Some(root_doc) = &root_pick {
+        existing_doc_title(&dir, root_doc)
+    } else {
+        match title {
+            Some(t) if !t.is_empty() => t,
+            _ if interactive => cliclack::input("Title")
+                .default_input(&default_title)
+                .placeholder(&default_title)
+                .interact::<String>()?,
+            _ => default_title,
+        }
     };
     let author = match author {
         Some(a) => (!a.trim().is_empty()).then(|| a.trim().to_string()),
@@ -1714,7 +1756,13 @@ fn cmd_init(
 
     // Write the root, and learn which file is the structural root document (the
     // node the config's `part_of` points back at, and the `next:` hint names).
-    let root_name = match carrier {
+    // An adopted existing document becomes the root as-is (its config pointer is
+    // added after the config document is written, below); otherwise a fresh root
+    // is synthesized in the chosen carrier.
+    let root_name = if let Some(root_doc) = &root_pick {
+        root_doc.to_string_lossy().into_owned()
+    } else {
+        match carrier {
         // Separate: a plain body file (heading only) plus a whole-file metadata
         // node that points at it via `content` and carries the same title/author/
         // config pointer a combined root would embed.
@@ -1744,6 +1792,7 @@ fn cmd_init(
             std::fs::write(dir.join(&content_name), editor.render()?)?;
             content_name.clone()
         }
+        }
     };
 
     // Write the config document beside the root, in the chosen metadata format:
@@ -1759,6 +1808,17 @@ fn cmd_init(
         config_map.insert(key, value);
     }
     std::fs::write(dir.join(&config_rel), meta::serialize_mapping(&config_map, meta_format)?)?;
+
+    // An adopted existing root did not get a `config` pointer during synthesis
+    // (it was not synthesized) — add it now, comment- and format-preservingly,
+    // so the workspace is discoverable from its own root like any other.
+    if root_pick.is_some() {
+        let root_full = dir.join(&root_name);
+        let text = std::fs::read_to_string(&root_full)?;
+        let doc = Document::parse(Path::new(&root_name), &text)?;
+        let updated = edit::set_in_text(&text, doc.carrier, "config", edit::infer_scalar(&config_name))?;
+        std::fs::write(&root_full, updated)?;
+    }
 
     // Adoption of pre-existing loose content (docs/init-adoption.md). `flat`
     // (Phase 1) links each document directly under the freshly-written root;
