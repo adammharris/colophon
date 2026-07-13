@@ -34,6 +34,7 @@ use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use crate::content::ContentFormat;
 use crate::error::Result;
 use crate::fs::Storage;
 use crate::identity::{self, Id, IdentityPolicy};
@@ -384,16 +385,25 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         Ok(findings)
     }
 
-    /// The content documents on disk that nothing reachable from `start` links
-    /// to — [`Finding::Orphan`] for each. The reachable set is `start` itself
-    /// plus every path a census link resolves to (any relation, a body wikilink,
-    /// or an id through the registry); a case-mismatched link counts its *actual*
-    /// on-disk file as reached, so a file is never both case-mismatched and
-    /// orphaned. Findings are sorted by path for a stable report.
+    /// The content documents in the workspace's *reached* directories that
+    /// nothing reachable from `start` links to — [`Finding::Orphan`] for each. The
+    /// reachable set is `start` itself plus every path a census link resolves to
+    /// (any relation, a body wikilink, or an id through the registry); a
+    /// case-mismatched link counts its *actual* on-disk file as reached, so a file
+    /// is never both case-mismatched and orphaned. Findings are sorted by path for
+    /// a stable report.
+    ///
+    /// Scope is **reachability-bounded** (DESIGN §8): only directories a linked
+    /// document already occupies are scanned, and never recursively — a
+    /// subdirectory nothing links into (a vendored tree, a nested colophon
+    /// workspace, a `scratch/` folder) is not read and yields no orphans. A new
+    /// directory enters scope by an explicit act that links into it (`new`,
+    /// `adopt`, `attach`, a `mirror` import); `check` then keeps it honest. The
+    /// deliberate trade: a document dropped into a not-yet-linked folder is
+    /// invisible here rather than flagged.
     ///
     /// Orphanhood is relative to `start`: run from the workspace root (the usual
-    /// case) it means "not in the workspace"; run from a subtree it means "not
-    /// reachable from here."
+    /// case) it means "on disk in a known directory but unlinked."
     async fn orphans(
         &self,
         start: &Path,
@@ -418,13 +428,17 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 _ => {}
             }
         }
-        Ok(self
-            .content_documents()
+        // Scan only the directories the reachable set occupies (their direct
+        // children), never descending into unreached subdirectories.
+        let reached_dirs = Self::reached_dirs(&reachable);
+        let mut docs: Vec<PathBuf> = self
+            .direct_child_files(&reached_dirs)
             .await?
             .into_iter()
-            .filter(|doc| !reachable.contains(doc))
-            .map(|doc| Finding::Orphan { doc })
-            .collect())
+            .filter(|p| ContentFormat::from_extension(p).is_some() && !reachable.contains(p))
+            .collect();
+        docs.sort();
+        Ok(docs.into_iter().map(|doc| Finding::Orphan { doc }).collect())
     }
 
     /// Take a census of every forward link reachable from `start`: one
@@ -1193,19 +1207,20 @@ mod tests {
     }
 
     #[test]
-    fn an_unlinked_document_is_reported_as_an_orphan() {
+    fn an_unlinked_document_in_a_known_directory_is_reported_as_an_orphan() {
         let dir = tempdir("orphan");
-        // index links a.md; a.md links back. loose.md is on disk but nobody
-        // points at it — the onboarding signal.
+        // index links a.md; a.md links back. loose.md sits in the *root*
+        // directory (which is reached) but nobody points at it — the onboarding
+        // signal.
         write(&dir, "index.md", "---\ncontents:\n- a.md\n---\n");
         write(&dir, "a.md", "---\npart_of: index.md\n---\n");
-        write(&dir, "notes/loose.md", "---\ntitle: Loose\n---\njust sitting here\n");
+        write(&dir, "loose.md", "---\ntitle: Loose\n---\njust sitting here\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
 
         // loose.md is flagged…
         assert!(
-            findings.iter().any(|f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("notes/loose.md"))),
+            findings.iter().any(|f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("loose.md"))),
             "{findings:?}"
         );
         // …but the linked files (root + reachable child) are not.
@@ -1213,6 +1228,36 @@ mod tests {
             !findings.iter().any(|f| matches!(f, Finding::Orphan { doc }
                 if doc == &PathBuf::from("index.md") || doc == &PathBuf::from("a.md"))),
             "linked files must not be orphans: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_document_in_an_unreached_directory_is_not_an_orphan() {
+        // Reachability-bounded discovery (DESIGN §8): a subdirectory nothing links
+        // into — a nested workspace, a vendored tree, a scratch folder — is never
+        // scanned, so its documents are invisible to `check` rather than orphaned.
+        let dir = tempdir("orphan-bounded");
+        write(&dir, "index.md", "---\ncontents:\n- a.md\n---\n");
+        write(&dir, "a.md", "---\npart_of: index.md\n---\n");
+        write(&dir, "vendor/other.md", "---\ntitle: Vendored\n---\n");
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let findings = block_on(ws.check("index.md")).unwrap();
+        assert_eq!(findings, vec![], "an unlinked subdirectory yields no findings: {findings:?}");
+    }
+
+    #[test]
+    fn an_orphan_in_a_reached_subdirectory_is_still_flagged() {
+        // Scope grows with the links: once a directory is reached (a document in
+        // it is linked), its *other* unlinked files become orphans.
+        let dir = tempdir("orphan-reached-sub");
+        write(&dir, "index.md", "---\ncontents:\n- notes/one.md\n---\n");
+        write(&dir, "notes/one.md", "---\npart_of: ../index.md\n---\n");
+        write(&dir, "notes/stray.md", "---\ntitle: Stray\n---\n");
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let findings = block_on(ws.check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("notes/stray.md"))),
+            "a stray file in a reached directory is an orphan: {findings:?}"
         );
     }
 

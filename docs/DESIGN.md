@@ -264,6 +264,25 @@ warnings and an autofixer. It returns findings; it does not panic. It also hosts
 the reconcile pass from §4 (an unregistered `[[colophon:id]]` reference is just
 another finding with an autofix: register it, or flag it if it cannot resolve).
 
+**Discovery is reachability-bounded.** The orphan check does not scan the whole
+subtree — it inspects only the directories a linked document already occupies,
+and never recursively. A subdirectory nothing links into (a vendored tree, a
+nested colophon workspace, a `scratch/` folder) is neither read nor reported, so
+`check` stays quiet about files that were never opted in. This is the same
+"invisible unless attached" rule §3's reachability applies to files, extended to
+directories: a directory enters scope only through an explicit act that links
+into it (`new`, `adopt`, `attach`, a `mirror` import), after which `check` keeps
+it honest — and scope grows with the links. The deliberate trade is that a
+document dropped into a not-yet-linked folder is invisible rather than flagged;
+the alternative (flagging every stray file anywhere beneath the root) makes
+colophon unusable inside a larger repo. The recursive filesystem walk survives
+only where it is an *explicit* import — `content_documents`/`plan_mirror` for
+`init --adopt mirror`, and `attach --all --recursive` — never in steady-state
+validation. (Resolution's flat scans — the title index and the frontmatter-id
+registry, §5 — stay whole-tree for now: bounding them would couple index-building
+to the very traversal it powers, breaking alias- and id-addressed *spanning*
+links. That narrowing is a separate step.)
+
 ## 9. Extraction discipline & status
 
 colophon is being extracted from `diaryx_core`. Guiding rules:
@@ -304,7 +323,7 @@ not yet ported.
 | ID links (`colophon:<id>` targets) | `link`/`tree`/`validate`/`mutate` | ✅ resolve through the registry everywhere paths do; never rewritten by moves (the registry update is the maintenance); findings: `MalformedId` (check char), `DanglingId` (tombstoned vs never-issued) |
 | Workspace composition + builder | `workspace` | ✅ type-flipping builder |
 | Traverse (spanning tree from a root) | `tree` | ✅ `Workspace::tree`; missing/cyclic/unreadable targets are marked nodes |
-| Scan (directory-driven discovery) | `workspace`/`intake` | ✅ `Workspace::content_documents` (flat content scan) powers the orphan check; `plan_mirror` walks the tree into a `StructurePlan` — the directory-driven half of intake |
+| Scan (directory-driven discovery) | `workspace`/`intake` | ✅ the orphan check is **reachability-bounded** (`direct_child_files` over reached directories, §8) — quiet inside a larger repo; the recursive `Workspace::content_documents` survives only for explicit imports (`plan_mirror` → a `StructurePlan`, `attach --all --recursive`) |
 | Mutation with link maintenance | `mutate` | ✅ first cut: `create`/`rename`/`delete`/`adopt` (parent entry, inverse links, re-relativization, labels kept; fig `Embed` edits). `adopt` links an *existing* file both ways without touching its body — the onboarding complement of `create` (`docs/init-adoption.md`, Phase 1), driving `init --adopt` and the orphan autofix. Remaining diaryx ops ⏳ |
 | Validation | `validate` | ✅ findings: broken link, case mismatch, duplicate containment, missing inverse, unreadable, malformed/dangling id, ambiguous alias, **id mismatch** + **unregistered id** (the frontmatter-storage reconcile pair), **orphan** (a content document on disk nothing reachable links to — the onboarding signal, `docs/init-adoption.md`). Autofix: missing inverse ✅; id mismatch → trust the registry (rewrite frontmatter) ✅; unregistered id → adopt into the registry ✅; orphan + body-link findings stay diagnosis-only |
 | Storage adapter + executor | `fs`, `exec` | ✅ `StdFs` + dependency-free `block_on` |
