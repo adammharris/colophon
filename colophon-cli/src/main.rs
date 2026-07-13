@@ -1075,11 +1075,10 @@ enum DirState {
     /// loose folder of notes. `init` can proceed, leaving them unlinked (a future
     /// `adopt` pulls them in); `docs` are their workspace-relative paths.
     LooseContent { docs: Vec<PathBuf> },
-    /// At least one document declares `contents`/`part_of` — an existing
-    /// colophon/diaryx-shaped tree. `init` must not mint a competing root; `root`
-    /// is the detected root candidate (a document with metadata and no `part_of`),
-    /// if unambiguous.
-    Structured { docs: Vec<PathBuf>, root: Option<PathBuf> },
+    /// A top-level document declares `contents` — an existing colophon/diaryx tree
+    /// rooted here. `init` must not mint a competing root; `root` is the detected
+    /// top-level root candidate, if unambiguous.
+    Structured { root: Option<PathBuf> },
     /// A colophon root or config document is already present — this is an
     /// initialized workspace. `marker` is the file that gave it away.
     Initialized { marker: PathBuf },
@@ -1095,12 +1094,38 @@ struct FoundDoc {
     root_candidate: bool,
 }
 
-/// Classify `dir` for `init`: detect an already-initialized workspace (an
-/// `index.*` root or a `colophon.*` config beside it), else scan the content
-/// documents present and decide loose-vs-structured-vs-greenfield. The second
-/// return is every loose *non-document* file (an image, a PDF, a binary, source
-/// code — anything colophon cannot read as text) — the population `init` can
-/// offer to attach. Empty for an already-initialized directory (`init` aborts).
+/// The directory's *own* top-level documents, parsed for the structural /
+/// root-candidate facts — the non-recursive counterpart to [`scan_docs`]. A
+/// colophon root is a top-level document, so "is this already a workspace?" is a
+/// top-level question: scanning the whole tree lets a vendored or nested markdown
+/// tree deeper in the repo masquerade as the root.
+fn top_level_docs(dir: &Path) -> Vec<FoundDoc> {
+    dir_listing(dir, Path::new(""))
+        .docs
+        .into_iter()
+        .map(|rel| {
+            let (structural, root_candidate) = std::fs::read_to_string(dir.join(&rel))
+                .ok()
+                .and_then(|t| Document::parse(&rel, &t).ok())
+                .filter(Document::has_meta)
+                .map(|doc| {
+                    let has_part_of = doc.meta.get("part_of").is_some();
+                    (has_part_of || doc.meta.get("contents").is_some(), !has_part_of)
+                })
+                .unwrap_or((false, false));
+            FoundDoc { rel, structural, root_candidate }
+        })
+        .collect()
+}
+
+/// Classify `dir` for `init`. Whether it is already a workspace is decided by the
+/// **top-level** documents (an `index.*`/`colophon.*` marker, or a top-level
+/// document that declares containment) — never by a recursive sweep, so a
+/// vendored or nested tree deeper in the repo cannot be mistaken for the root or
+/// inflate the count. Otherwise the loose content is gathered (recursively, for a
+/// `mirror` import) to decide loose-vs-greenfield. The second return is every
+/// loose *non-document* file (image, PDF, binary, source code) `init` can offer
+/// to attach. Empty for an already-a-workspace directory (`init` aborts).
 fn classify_dir(dir: &Path) -> (DirState, Vec<PathBuf>) {
     // An existing root (`index.<content|meta-ext>`) or config sidecar
     // (`colophon.<meta-ext>`) at the top level means this is already a workspace.
@@ -1117,16 +1142,27 @@ fn classify_dir(dir: &Path) -> (DirState, Vec<PathBuf>) {
         }
     }
 
+    // A top-level document that declares containment is a tree root here (e.g. a
+    // README-rooted vault with no index/colophon marker) — this is already a
+    // workspace, rooted at the top level, whatever nested trees the repo carries.
+    let top = top_level_docs(dir);
+    if top.iter().any(|d| d.structural) {
+        let root = pick_root_candidate(&top);
+        return (DirState::Structured { root }, Vec::new());
+    }
+
+    // Not an existing workspace. Gather loose content to offer for adoption —
+    // recursively (a folder of notes to mirror), keeping only the *unattached*
+    // documents: one already declaring containment belongs to some other tree
+    // (vendored, nested) and is not loose content of this directory.
     let mut docs = Vec::new();
     let mut others = Vec::new();
     scan_docs(dir, Path::new(""), &mut docs, &mut others);
-    let state = if docs.is_empty() {
+    let loose: Vec<PathBuf> = docs.into_iter().filter(|d| !d.structural).map(|d| d.rel).collect();
+    let state = if loose.is_empty() {
         DirState::Greenfield
-    } else if docs.iter().any(|d| d.structural) {
-        let root = pick_root_candidate(&docs);
-        DirState::Structured { docs: docs.into_iter().map(|d| d.rel).collect(), root }
     } else {
-        DirState::LooseContent { docs: docs.into_iter().map(|d| d.rel).collect() }
+        DirState::LooseContent { docs: loose }
     };
     (state, others)
 }
@@ -1449,18 +1485,15 @@ fn cmd_init(
         // second root. Adopting a tree (attaching config, linking loose files)
         // is not built yet, so refuse with the path that is — `colophon config`
         // attaches policy to the existing root.
-        DirState::Structured { docs, root } => {
+        DirState::Structured { root } => {
             let root_note = root
                 .as_ref()
                 .map(|r| format!(" (root: {})", r.display()))
                 .unwrap_or_default();
             return Err(format!(
-                "this directory already holds a structured workspace{root_note}: \
-                 {} document(s) declare containment links, so `init` would mint a \
-                 competing root.\n\
-                 To attach colophon configuration to the existing tree, run \
-                 `colophon config <key> <value>` from here.",
-                docs.len()
+                "this directory already holds a colophon workspace{root_note}. \
+                 `init` would mint a competing root — to attach colophon configuration \
+                 to the existing tree, run `colophon config <key> <value>` from here."
             )
             .into());
         }
