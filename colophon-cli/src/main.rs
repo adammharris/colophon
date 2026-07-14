@@ -269,6 +269,16 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Duplicate a document as a fresh sibling under the same parent, linking the
+    /// copy in both directions. The copy takes the next free `-copy` name and
+    /// carries the source's title, body, and metadata — but never its stable ID
+    /// (identity is per-document) nor its children (a shallow copy, so no child is
+    /// left with two parents). A separated node's body file is copied too.
+    #[command(alias = "dup")]
+    Duplicate {
+        /// Path of the document to duplicate.
+        source: PathBuf,
+    },
     /// Ensure a document has a stable ID and print its `colophon:<id>` target.
     /// Registers it in the workspace's registry document (bootstrapping
     /// registry.yaml + the root's `registry` pointer on first use) — link that
@@ -756,6 +766,7 @@ fn main() -> ExitCode {
         }
         Command::Mv { from, to } => cmd_mv(&from, &to),
         Command::Rm { path, force } => cmd_rm(&path, force),
+        Command::Duplicate { source } => cmd_duplicate(&source),
         Command::Id { file } => cmd_id(&file),
         Command::Resolve { id } => cmd_resolve(&id),
         Command::Backlinks { file } => cmd_backlinks(&file),
@@ -2720,6 +2731,25 @@ fn cmd_rm(path: &Path, force: bool) -> CmdResult {
     for finding in &danglers {
         eprintln!("warning: now dangling — {finding}");
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_duplicate(source: &Path) -> CmdResult {
+    let mut ctx = find_root()?;
+    // Attaching the copy authors the parent's spanning entry, which mints an ID
+    // when that style registers (or under an eager policy) — same as `new`, so
+    // bootstrap a registry to persist it before building the workspace.
+    let link_registers = ctx.config.reference_style().registers()
+        || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+    let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
+        || ctx.config.identity.fires_on(Trigger::Create);
+    if mints {
+        ensure_registry(&mut ctx)?;
+    }
+    let mut ws = workspace(&ctx)?;
+    let copy = block_on(ws.duplicate(&ws_rel(&ctx, source)?))?;
+    persist(&ctx, &mut ws)?;
+    println!("duplicated {} -> {}", source.display(), copy.display());
     Ok(ExitCode::SUCCESS)
 }
 

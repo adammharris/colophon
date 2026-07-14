@@ -167,10 +167,36 @@ defaults. `link_format` precedence: config doc > root frontmatter (diaryx compat
   authoring is style-consistent (and `mv` becomes style-faithful — the earlier
   round-trip-faithfulness item folds into this).
 - **Own the link-syntax layer in colophon (don't publish a 3rd crate).** Having
-  now read diaryx's `link_parser` (~730 lines, well-tested: parse/canonicalize/
+  now read diaryx's `link_parser` (~1900 lines, well-tested: parse/canonicalize/
   format-in-4-styles/convert/relative/title), the clean end-state per DESIGN §9
   is colophon *owning* this and diaryx depending on colophon — not a speculative
-  shared crate. Port the remaining pieces colophon still lacks: balanced-paren
-  path parsing (`find_closing_paren`), `convert_link(s)` for a workspace-wide
-  style migration (`colophon relink --to <style>`), and the `PathType`/ambiguous
-  legacy handling. Then diaryx can drop its copy.
+  shared crate. **Decisions taken (this session):**
+  - **Model — colophon's `ReferenceStyle` is canonical; diaryx rewrites onto it.**
+    colophon's axes (`Wrapper` × `Addressing` × `LinkStyle`) already *subsume*
+    diaryx's flat `LinkFormat`: each of its 4 variants is
+    `Wrapper::Markdown × Addressing::Path × {one LinkStyle}`. diaryx maps its enum
+    as a thin compat shim on its own side and deletes `link_parser.rs`. The
+    id/alias/wikilink axes are colophon-native, no diaryx equivalent.
+  - **Bare paths — `resolve()` stays `bare = directory-relative`** (which already
+    matches diaryx's legacy `Ambiguous` reading), so **no `PathType` machinery** is
+    ported: the ambiguity is settled by committing to one meaning, not tagging it.
+    Retire/redefine `plain_canonical`, whose current "bare = *root*-relative" claim
+    is a latent bug — `path_text(PlainCanonical)` emits a root-relative bare path
+    but `resolve()` reads bare as dir-relative, so those links resolve correctly
+    only for documents at the workspace root.
+  - **Migration wrinkle this creates.** diaryx's `plain_canonical` *means*
+    bare-root-relative, which colophon will no longer offer — so a diaryx workspace
+    on `plain_canonical` can't just remap the enum; its links resolve differently
+    under colophon's resolver. `colophon relink --to markdown_root` is the bridge
+    (rewrites bare-root paths to `/`-prefixed), so the converter is the cutover
+    tool, not merely a convenience.
+  - **Scope — full port, including body `[text](path)` link resolution.** Two
+    landable stages with a clean seam:
+    - *Stage 1 (twig-independent, can land now):* balanced-paren path parsing
+      (`find_closing_paren`), `convert_link(s)` + a `colophon relink --to <style>`
+      command for workspace-wide style migration, and the `plain_canonical` fix.
+      This alone lets diaryx drop the bulk of `link_parser.rs`.
+    - *Stage 2 (rides twig):* resolving real markdown/djot links from body prose,
+      gated on a `twig_document_links()` C export (spans + url + kind — the
+      generalization of the `twig_document_code_spans` export already added; see
+      "Body parsing (`twig`)" above). Slots in once twig exposes link nodes.
