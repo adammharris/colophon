@@ -24,11 +24,11 @@ fig = { version = "2.5.0", default-features = false, features = ["serde", "deriv
 indexmap = { version = "2.0", features = ["serde"] }
 thiserror = "2.0"
 
-# Body-prose parsing (Djot/Markdown), for the `content` feature — colophon's
-# body-parser dependency (see docs/next-steps.md). A sibling checkout, path-
-# dependent for now; switch to a published version once it's out. Zig-backed
-# like `fig`, same build shape.
-twig = { path = "../twig/bindings/rust/twig", version = "0.1.0" }
+# Body-prose parsing (Djot/Markdown) — colophon's body-parser dependency (see
+# `src/content.rs`). Published on crates.io as `twig-doc`; imported under the
+# `twig` name via `package`. Pinned to 1.0.0. Zig-backed like `fig`, same build
+# shape (its build.rs runs `zig build`).
+twig = { package = "twig-doc", version = "1.0.0" }
 
 # Internal crate.
 colophon = { path = "colophon", version = "0.1.0" }
