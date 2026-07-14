@@ -217,6 +217,38 @@ pub fn path_to_title(path: &Path) -> String {
         .join(" ")
 }
 
+/// Turn a human title into a filesystem-friendly filename stem — the readable
+/// slug colophon derives when a document is created by title (`colophon new "My
+/// Great Note"` → `my-great-note`). The rough inverse of
+/// [`path_to_title`]: lowercase, runs of whitespace and separators
+/// (space / `-` / `_` / `/`) collapsed to a single `-`, and any other
+/// punctuation dropped. Unicode letters and digits are kept, so a non-ASCII
+/// title still yields a legible name. A title with no slug-able characters (pure
+/// punctuation) falls back to `"untitled"` so the result is always a valid stem.
+///
+/// The point is colophon's legibility contract (DESIGN §1): a title-first
+/// authoring flow that still leaves *readable paths* in the tree and in
+/// path-addressed links — unlike an opaque `note-3.md`.
+pub fn slug(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut pending_dash = false;
+    for ch in title.chars() {
+        if ch.is_alphanumeric() {
+            if pending_dash {
+                out.push('-');
+                pending_dash = false;
+            }
+            out.extend(ch.to_lowercase());
+        } else if ch.is_whitespace() || matches!(ch, '-' | '_' | '/') {
+            // Defer the separator: only emitted if a kept character follows, so
+            // leading, trailing, and repeated separators never reach `out`.
+            pending_dash = !out.is_empty();
+        }
+        // Any other character (punctuation, symbols) is dropped.
+    }
+    if out.is_empty() { "untitled".to_string() } else { out }
+}
+
 /// The target scheme marking a link-by-ID: `id:<id>`.
 pub const ID_SCHEME: &str = "id:";
 
@@ -685,6 +717,25 @@ pub fn relative(from_dir: &Path, to: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slug_makes_readable_stems_and_round_trips_the_common_case() {
+        assert_eq!(slug("My Great Note"), "my-great-note");
+        // Collapses/strips separators and punctuation; keeps it legible.
+        assert_eq!(slug("  Hello,  World!  "), "hello-world");
+        assert_eq!(slug("already-a-slug"), "already-a-slug");
+        assert_eq!(slug("under_scored/and slashed"), "under-scored-and-slashed");
+        assert_eq!(slug("v1.0 Release"), "v10-release");
+        // Unicode letters/digits survive.
+        assert_eq!(slug("Café Notes"), "café-notes");
+        // No leading/trailing/double dashes ever reach the output.
+        assert_eq!(slug("--x--y--"), "x-y");
+        // A title with nothing slug-able still yields a valid stem.
+        assert_eq!(slug("!!!"), "untitled");
+        assert_eq!(slug(""), "untitled");
+        // The everyday case is the inverse of path_to_title.
+        assert_eq!(path_to_title(std::path::Path::new("my-great-note.md")), "My Great Note");
+    }
 
     #[test]
     fn parses_labeled_and_bare_links() {

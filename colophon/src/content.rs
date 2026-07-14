@@ -49,6 +49,18 @@ impl ContentFormat {
         }
     }
 
+    /// The canonical file extension for this grammar (no leading dot) — what a
+    /// freshly authored document's filename gets when colophon derives a name
+    /// from a title (`colophon new "A Title"`). The inverse of the primary
+    /// [`from_extension`](Self::from_extension) spelling.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Djot => "dj",
+            Self::Html => "html",
+        }
+    }
+
     /// The `content_format` config-document spelling for this grammar.
     pub fn as_config_str(self) -> &'static str {
         match self {
@@ -125,6 +137,15 @@ mod tests {
         assert_eq!(ContentFormat::from_extension(Path::new("a.htm")), Some(ContentFormat::Html));
         assert_eq!(ContentFormat::from_extension(Path::new("a.yaml")), None);
         assert_eq!(ContentFormat::from_extension(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn extension_matches_the_primary_from_extension_spelling() {
+        // The derived filename's extension must round-trip back to the same format.
+        for f in [ContentFormat::Markdown, ContentFormat::Djot, ContentFormat::Html] {
+            let name = format!("derived.{}", f.extension());
+            assert_eq!(ContentFormat::from_extension(Path::new(&name)), Some(f));
+        }
     }
 
     #[test]

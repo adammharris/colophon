@@ -217,13 +217,27 @@ enum Command {
         #[arg(long)]
         fix: bool,
     },
-    /// Create a document as a child of a parent, linking both directions.
+    /// Create a document as a child of a parent, linking both directions. The
+    /// positional is the new document's **title** — colophon derives a readable
+    /// filename from it (a slug plus the workspace's content extension) in the
+    /// parent's directory, and records the title in the document's metadata,
+    /// where structure lives. Override the derived filename with `--as` (an exact
+    /// path) or just its extension with `--ext`.
     New {
-        /// Path of the document to create.
-        path: PathBuf,
+        /// Title of the new document (recorded in its metadata; a readable
+        /// filename is slugged from it unless `--as` overrides).
+        title: String,
         /// The parent document (gains a spanning link to the new file).
         #[arg(long, short)]
         parent: PathBuf,
+        /// Use this exact workspace path instead of a title-derived name (the
+        /// title is still taken from the positional). Wins over `--ext`.
+        #[arg(long = "as")]
+        as_path: Option<PathBuf>,
+        /// Override just the derived filename's extension (e.g. `djot`, `yaml`);
+        /// ignored under `--as`. Default: the workspace's content format.
+        #[arg(long)]
+        ext: Option<String>,
     },
     /// Give an arbitrary file (an image, a PDF, any binary) workspace-linked
     /// metadata: write a sidecar `<file>.yaml` beside it carrying its title,
@@ -760,7 +774,9 @@ fn main() -> ExitCode {
         Command::Tree { root } => cmd_tree(root.as_deref()),
         Command::Explore { file } => cmd_explore(file.as_deref()),
         Command::Check { root, fix } => cmd_check(root.as_deref(), fix),
-        Command::New { path, parent } => cmd_new(&path, &parent),
+        Command::New { title, parent, as_path, ext } => {
+            cmd_new(&title, &parent, as_path.as_deref(), ext.as_deref())
+        }
         Command::Attach { payload, parent, all, recursive } => {
             cmd_attach(payload.as_deref(), parent.as_deref(), all, recursive)
         }
@@ -2612,7 +2628,7 @@ fn prompt(message: &str) -> Result<String, AnyError> {
     Ok(line.trim().to_lowercase())
 }
 
-fn cmd_new(path: &Path, parent: &Path) -> CmdResult {
+fn cmd_new(title: &str, parent: &Path, as_path: Option<&Path>, ext: Option<&str>) -> CmdResult {
     let mut ctx = find_root()?;
     // Authoring a reference that registers (the default style, or any relation's
     // override — e.g. `part_of: id` in a split) mints IDs, as does an eager
@@ -2625,8 +2641,22 @@ fn cmd_new(path: &Path, parent: &Path) -> CmdResult {
     if mints {
         ensure_registry(&mut ctx)?;
     }
+    let parent_rel = ws_rel(&ctx, parent)?;
+    // The new document's path: an explicit `--as` wins; otherwise a readable
+    // filename derived from the title — `slug(title).<ext>` beside the parent,
+    // where the extension is `--ext` or the workspace's content format. The title
+    // itself is always recorded in metadata (structure lives there, not the name).
+    let path = match as_path {
+        Some(p) => ws_rel(&ctx, p)?,
+        None => {
+            let extension = ext.map(str::to_owned)
+                .unwrap_or_else(|| ctx.config.content_format.extension().to_string());
+            let name = format!("{}.{extension}", link::slug(title));
+            parent_rel.parent().unwrap_or(Path::new("")).join(name)
+        }
+    };
     let mut ws = workspace(&ctx)?;
-    let created = block_on(ws.create(&ws_rel(&ctx, path)?, &ws_rel(&ctx, parent)?))?;
+    let created = block_on(ws.create_with_title(&path, &parent_rel, title))?;
     persist(&ctx, &mut ws)?;
     // A separated child is a pair — the metadata node the parent links, plus its
     // prose body file. Name both so it is clear two files were written.
@@ -2635,7 +2665,7 @@ fn cmd_new(path: &Path, parent: &Path) -> CmdResult {
             println!("created {} (in {})", created.node.display(), parent.display());
             println!("  body: {}", body.display());
         }
-        None => println!("created {} (in {})", path.display(), parent.display()),
+        None => println!("created {} (in {})", created.node.display(), parent.display()),
     }
     Ok(ExitCode::SUCCESS)
 }

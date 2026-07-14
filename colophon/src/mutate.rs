@@ -77,6 +77,22 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         self.create_titled(path, parent, None).await
     }
 
+    /// [`create`](Self::create) with an explicit `title` recorded in the new
+    /// document's metadata, rather than one derived from its file stem. This is
+    /// the title-primary authoring entry point (`colophon new "My Great Note"`):
+    /// the caller slugs the title into a readable filename ([`link::slug`]) and
+    /// keeps the original title — casing, spaces, and punctuation — in the
+    /// document, where structure and identity live (DESIGN §1). The parent's
+    /// spanning-entry label follows the title too.
+    pub async fn create_with_title(
+        &mut self,
+        path: &Path,
+        parent: &Path,
+        title: &str,
+    ) -> Result<Created> {
+        self.create_titled(path, parent, Some(title)).await
+    }
+
     /// [`create`](Self::create) with an explicit title for the new document,
     /// used where the file stem is a poor title — a synthesized folder-note
     /// (`index.md`) that should read as its folder (`intake.rs`). `None` falls
@@ -1521,6 +1537,26 @@ mod tests {
         );
         // The parent's spanning entry was removed, not reported.
         assert!(!read(&dir, "index.md").contains("a.md"), "parent entry cleaned");
+    }
+
+    #[test]
+    fn create_with_title_keeps_the_title_distinct_from_the_slugged_stem() {
+        // Title-primary authoring: the caller slugs the title into a readable
+        // filename but the document records the original title verbatim (casing
+        // and spaces the stem cannot carry), and the parent's entry label follows.
+        let dir = tempdir("create-title");
+        write(&dir, "index.md", "---\ntitle: Root\n---\n");
+        let stem = crate::link::slug("My Great Note");
+        assert_eq!(stem, "my-great-note");
+        let path = PathBuf::from(format!("{stem}.md"));
+
+        block_on(ws(&dir).create_with_title(&path, Path::new("index.md"), "My Great Note")).unwrap();
+
+        let child = read(&dir, "my-great-note.md");
+        assert!(child.contains("title: My Great Note"), "original title kept: {child}");
+        // The parent's spanning-entry label reads as the title, not the stem.
+        assert!(read(&dir, "index.md").contains("My Great Note"), "{}", read(&dir, "index.md"));
+        assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 
     #[test]

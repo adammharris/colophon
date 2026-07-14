@@ -94,14 +94,18 @@ switch to a published version once `twig`'s Rust bindings have proven out.
   actually take effect — not a default feature yet, since it pulls in the
   path-dependent `twig` (no released version to depend on by default).
   Whether it should become default once `twig` is published is open.
-- **`twig`'s AST query surface is still bigger than what's exposed at the C
-  boundary.** Its Zig-level `ast/select.zig` (CSS-lite selectors) and
-  `ast/reader.zig` (`pathOf`, arbitrary node/kind access) have everything
-  needed to resolve `link`/`url` nodes directly, not just the fixed
-  code-kind set `twig_document_code_spans` hardcodes. A generic "query by
-  kind" or selector-based C ABI export would let colophon resolve real
-  markdown/djot links from body prose instead of re-deriving them from
-  `[[…]]` text — a bigger lift than this pass, left for when that's needed.
+- ✅ **`twig`'s generic query surface is now exposed at the C boundary** — the
+  hoped-for selector export landed. `twig_document_query` (Rust:
+  `Document::query(selector)`, a CSS-lite selector reaching *every* node kind,
+  returning `QueryMatch { span, kind }`) replaced the code-kind-specific
+  accessor `code_spans` used to bind; `code_spans` now selects the code kinds
+  itself over the generic API. Crucially for link ownership, twig also exposes a
+  flat-node array (`Editor::nodes() -> [FlatNode]`) whose `destination:
+  Option<String>` carries each `link`/`image` node's target. So resolving real
+  markdown/djot body links **no longer waits on a new twig export** — it needs a
+  colophon-side `content::body_links()` that queries `link`/`image` nodes (spans
+  from `query`, targets from the flat-node destinations). This *is* the
+  link-syntax "Stage 2" dependency, and it is already satisfied on twig's side.
 
 ## Workspace config (the `config` relation)
 
@@ -126,11 +130,16 @@ defaults. `link_format` precedence: config doc > root frontmatter (diaryx compat
   identity registers on a link, else a path in the link style. `create` mints
   IDs → `cmd_new` bootstraps the registry first when it will mint.
 - ✅ **`default_embed_format`** wired into `create` (new-doc archetype default).
-- **More config knobs.** `content_format` — the body-parser dependency this
-  waited on now exists (see "Body parsing (`twig`)" above; `ContentFormat` is
-  ready to be the knob's value type, it just isn't threaded into
-  `WorkspaceConfig` yet); `vocabulary` (a named `RelationSet` preset, later a
-  full spec).
+- ✅ **`content_format`** — the body-prose grammar, a full `WorkspaceConfig` field
+  (`markdown`/`djot`/`html`), persisted by `init` (from `--content`) and read back
+  like every other knob. `ContentFormat::extension()` gives the canonical file
+  extension, so **title-primary `colophon new "A Title"`** derives a readable
+  filename (`link::slug(title).<content-ext>`) beside the parent while recording
+  the real title in metadata; `--as <path>` / `--ext <e>` override the derived
+  name (DESIGN §1 legibility — a slug, never an opaque `note-3.md`). The
+  title-primary library seam is `Workspace::create_with_title`.
+- **More config knobs.** `vocabulary` (a named `RelationSet` preset, later a full
+  spec).
 - **`colophon config preset diaryx|obsidian`** — write a whole preset via
   `WorkspaceConfig::to_mapping` (the round-trip is already there).
 - **Route `rename`'s path rewrites through the link style too.** `create` and
@@ -196,7 +205,12 @@ defaults. `link_format` precedence: config doc > root frontmatter (diaryx compat
       (`find_closing_paren`), `convert_link(s)` + a `colophon relink --to <style>`
       command for workspace-wide style migration, and the `plain_canonical` fix.
       This alone lets diaryx drop the bulk of `link_parser.rs`.
-    - *Stage 2 (rides twig):* resolving real markdown/djot links from body prose,
-      gated on a `twig_document_links()` C export (spans + url + kind — the
-      generalization of the `twig_document_code_spans` export already added; see
-      "Body parsing (`twig`)" above). Slots in once twig exposes link nodes.
+    - *Stage 2 (body links — twig dependency already satisfied):* resolving real
+      markdown/djot links from body prose. Earlier notes assumed this waited on a
+      new `twig_document_links()` export; it does not — twig's generic
+      `Document::query` selector plus the `FlatNode.destination` array already
+      expose link/image nodes with spans *and* targets (see "Body parsing
+      (`twig`)" above). What remains is colophon-side: a `content::body_links()`
+      over that surface, then feeding it into census/rename/check the way
+      `scan_wikilinks` already is. So the whole link-syntax port is effectively
+      un-gated on twig now — only sequencing keeps Stage 1 first.
