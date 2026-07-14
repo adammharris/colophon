@@ -30,5 +30,11 @@ thiserror = "2.0"
 # shape (its build.rs runs `zig build`).
 twig = { package = "twig-doc", version = "1.0.0" }
 
+# Opaque document-ID minting: betanumeric alphabet + NOID-style check character
+# over a seeded PRNG. Colophon supplies its own seed (uniqueness is enforced by
+# rejection against the index, not entropy), so the dependency-free default —
+# no `os`/`js` features — is all it needs. See `colophon/src/identity.rs`.
+moid = "0.1.0"
+
 # Internal crate.
 colophon = { path = "colophon", version = "0.1.0" }

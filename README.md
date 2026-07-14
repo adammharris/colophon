@@ -24,7 +24,7 @@ colophon is generic over the small async [`colophon::Storage`](colophon/src/fs.r
 
 Works for simple workspaces.
 
-Development resumed, now that [Twig](https://github.com/adammharris/twig) has gained the ability to parse markdown document structure. Twig is now published on crates.io (as `twig-doc`, pinned to 1.0.0), so a local checkout is no longer required — but it is Zig-backed (its build script runs `zig build`), so you still need the `zig` toolchain alongside `cargo` to build Colophon.
+Working toward 1.0 now that Twig (Zig dependency) has reached 1.0.
 
 ## License
 

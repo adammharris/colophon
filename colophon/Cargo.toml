@@ -20,6 +20,10 @@ fig.workspace = true
 indexmap.workspace = true
 thiserror.workspace = true
 
+# Opaque document-ID minting (alphabet + check character + seeded PRNG). See
+# `src/identity.rs`; the policy layer around it stays colophon's own.
+moid.workspace = true
+
 # Body-prose parsing (Djot/Markdown) — see `src/content.rs`. Zig-backed (its
 # build.rs runs `zig build`, same shape as `fig`), so building colophon needs
 # the Zig toolchain. A required dependency: body rendering and code-aware

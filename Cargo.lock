@@ -124,6 +124,7 @@ version = "0.1.0"
 dependencies = [
  "fig",
  "indexmap",
+ "moid",
  "thiserror",
  "twig-doc",
 ]
@@ -272,6 +273,12 @@ name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+
+[[package]]
+name = "moid"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a010d90c8a99ad030136e66d2008649599f42040b888872944b7fb6a10ba8da2"
 
 [[package]]
 name = "once_cell"
