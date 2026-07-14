@@ -123,6 +123,30 @@ pub fn code_spans(body: &str, format: ContentFormat) -> crate::error::Result<Vec
     Ok(spans)
 }
 
+/// The byte ranges in `body` that `twig` parses as inline links — the whole
+/// `[text](target)` construct of each `link` node, in source order. This is the
+/// syntax-aware, code-aware complement to colophon's lexical `[[…]]` scan: twig
+/// never reports a `[x](y)` inside a code fence, an autolink's angle brackets,
+/// or bracket text that is not actually a link, so a body-link scan built on
+/// these spans cannot mistake prose or code for a link. The caller slices each
+/// span and parses it with [`crate::link::Link::parse`] to read the target —
+/// each span holds exactly one link, so the parse never over-reaches.
+///
+/// Reference-style and autolink forms also surface as `link` nodes; the caller
+/// keeps only the inline `[label](target)` ones (a successful markdown parse),
+/// which is the form colophon can resolve and rewrite in place.
+pub fn link_spans(body: &str, format: ContentFormat) -> crate::error::Result<Vec<std::ops::Range<usize>>> {
+    let mut doc = parse(body, format)?;
+    let mut spans: Vec<_> = doc
+        .query("link")
+        .map_err(|e| crate::error::Error::Content(format!("twig query link: {e}")))?
+        .into_iter()
+        .map(|m| m.span)
+        .collect();
+    spans.sort_by_key(|s| s.start);
+    Ok(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +188,34 @@ mod tests {
     fn renders_html_via_twig_ffi() {
         let html = render_html("<p>hi</p>", ContentFormat::Html).unwrap();
         assert!(html.contains("hi"));
+    }
+
+    #[test]
+    fn link_spans_find_inline_links_but_not_code_or_prose() {
+        let body = "See [the doc](notes/a.md) and `[not](a link)` and plain [text].";
+        let spans = link_spans(body, ContentFormat::Markdown).unwrap();
+        // The real inline link is found, its span the whole `[label](target)`.
+        let want = body.find("[the doc](notes/a.md)").unwrap();
+        assert!(
+            spans.iter().any(|s| s.start == want && &body[s.clone()] == "[the doc](notes/a.md)"),
+            "expected the inline link span, got {spans:?}"
+        );
+        // The backtick-wrapped `[not](a link)` is code, not a link.
+        let code_at = body.find("[not]").unwrap();
+        assert!(!spans.iter().any(|s| s.contains(&code_at)), "code must not be a link: {spans:?}");
+        // `[text]` with no destination is not a link either.
+        let bracket_at = body.find("[text]").unwrap();
+        assert!(!spans.iter().any(|s| s.contains(&bracket_at)), "bare brackets are not a link");
+    }
+
+    #[test]
+    fn link_spans_read_djot_links_too() {
+        let body = "Here is [a link](../b.dj) inline.\n";
+        let spans = link_spans(body, ContentFormat::Djot).unwrap();
+        assert!(
+            spans.iter().any(|s| &body[s.clone()] == "[a link](../b.dj)"),
+            "djot inline link span, got {spans:?}"
+        );
     }
 
     #[test]

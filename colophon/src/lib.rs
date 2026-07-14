@@ -78,7 +78,8 @@ pub use identity::{Id, IdentityPolicy, Minter, Registration, Trigger};
 pub use index::{FileIndex, InMemoryIndex, IndexStore, NoIndex};
 pub use intake::{Adoption, PlanOutcome, StructurePlan, SynthNode};
 pub use link::{
-    Addressing, Link, LinkStyle, ReferenceStyle, Wikilink, Wrapper, format_link, path_to_title,
+    Addressing, BodyLink, Link, LinkStyle, ReferenceStyle, Wikilink, Wrapper, format_link,
+    path_to_title,
 };
 pub use meta::{Mapping, Value};
 pub use mutate::Created;

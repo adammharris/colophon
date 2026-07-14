@@ -101,11 +101,13 @@ switch to a published version once `twig`'s Rust bindings have proven out.
   accessor `code_spans` used to bind; `code_spans` now selects the code kinds
   itself over the generic API. Crucially for link ownership, twig also exposes a
   flat-node array (`Editor::nodes() -> [FlatNode]`) whose `destination:
-  Option<String>` carries each `link`/`image` node's target. So resolving real
-  markdown/djot body links **no longer waits on a new twig export** — it needs a
-  colophon-side `content::body_links()` that queries `link`/`image` nodes (spans
-  from `query`, targets from the flat-node destinations). This *is* the
-  link-syntax "Stage 2" dependency, and it is already satisfied on twig's side.
+  Option<String>` carries each `link`/`image` node's target. ✅ **Consumed:**
+  `content::link_spans` queries `link` nodes for their spans, and
+  `link::scan_body_links` slices each span and parses it with `Link::parse` (the
+  span is authoritative, so no `destination` lookup is needed and no
+  balanced-paren scan can over-reach). This is what made link-syntax **Stage 2**
+  land (see below). Still unused from this surface: `image` nodes and the
+  `destination`/reference-link path — a follow-up when non-inline links matter.
 
 ## Workspace config (the `config` relation)
 
@@ -205,12 +207,20 @@ defaults. `link_format` precedence: config doc > root frontmatter (diaryx compat
       (`find_closing_paren`), `convert_link(s)` + a `colophon relink --to <style>`
       command for workspace-wide style migration, and the `plain_canonical` fix.
       This alone lets diaryx drop the bulk of `link_parser.rs`.
-    - *Stage 2 (body links — twig dependency already satisfied):* resolving real
-      markdown/djot links from body prose. Earlier notes assumed this waited on a
-      new `twig_document_links()` export; it does not — twig's generic
-      `Document::query` selector plus the `FlatNode.destination` array already
-      expose link/image nodes with spans *and* targets (see "Body parsing
-      (`twig`)" above). What remains is colophon-side: a `content::body_links()`
-      over that surface, then feeding it into census/rename/check the way
-      `scan_wikilinks` already is. So the whole link-syntax port is effectively
-      un-gated on twig now — only sequencing keeps Stage 1 first.
+    - ✅ *Stage 2 (body links) — done.* Real markdown/djot `[label](target)`
+      links in body prose are now first-class alongside `[[wikilinks]]`.
+      `content::link_spans` queries twig for `link`-node spans (code-aware:
+      never a `[x](y)` inside a fence, an autolink, or non-link brackets);
+      `link::scan_body_links` unifies those with the lexical wikilink scan into
+      one `BodyLink { link: Link, span }` currency. Because twig hands back the
+      exact span of each link, `Link::parse` reads each one in isolation — the
+      **balanced-paren hazard is structurally absent** on the body side (Stage 1
+      still needs `find_closing_paren` for frontmatter/longer strings). The three
+      consumers (`census`/`check`, `title_scope`, the rename body-rewrite
+      helpers) all moved onto `scan_body_links`, so in one pass: `check`
+      diagnoses broken markdown/djot body links, backlinks include them, and
+      `rename` re-relativizes them (wrapper-preserving — a markdown link stays
+      markdown) while sparing id/external targets and code fences. Inline links
+      only for now; reference-style/autolink and `image` nodes are a follow-up.
+      Remaining Stage 1 (converter/`relink`, `find_closing_paren`,
+      `plain_canonical` fix) is still what lets diaryx delete `link_parser.rs`.

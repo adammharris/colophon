@@ -633,17 +633,18 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 });
             }
 
-            // Body wikilinks — overlay references, censused but never spanning.
-            for wikilink in link::scan_wikilinks(&path, &doc.body) {
-                let wl = Link::parse(&wikilink.target);
+            // Body links — `[[wikilinks]]` and markdown/djot `[t](a)` links
+            // alike — overlay references, censused but never spanning.
+            for body_link in link::scan_body_links(&path, &doc.body) {
+                let wl = body_link.link;
                 if titles.is_none() && title::is_alias_shaped(&wl.target) {
                     titles = Some(self.title_index_scoped(start).await?);
                 }
                 let resolution = self.resolve_forward(&path, &wl, titles.as_ref()).await;
                 census.push(CensusEntry {
                     source: path.clone(),
-                    site: LinkSite::Body(wikilink.span),
-                    target_text: wikilink.target,
+                    site: LinkSite::Body(body_link.span),
+                    target_text: wl.target,
                     resolution,
                 });
             }

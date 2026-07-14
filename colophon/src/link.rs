@@ -604,6 +604,86 @@ pub fn scan_wikilinks(path: &Path, body: &str) -> Vec<Wikilink> {
     }
 }
 
+/// One link found in body prose: the parsed [`Link`] (target, label, and whether
+/// it was an Obsidian `[[…]]` wikilink or a markdown/djot `[label](target)`
+/// link) together with the byte [`span`](BodyLink::span) of the whole construct
+/// — exactly what a rewrite replaces. The unifying body-link currency: census,
+/// `check`, and the rename machinery all consume this, blind to which syntax the
+/// link was written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyLink {
+    /// The parsed link — [`render`](Link::render) reproduces its original
+    /// wrapper, so a retargeted `[[a]]` stays a wikilink and a `[t](a)` stays a
+    /// markdown link.
+    pub link: Link,
+    /// Byte range of the whole link construct within the scanned body.
+    pub span: Range<usize>,
+}
+
+impl BodyLink {
+    /// The stable ID this link names, if any — [`Link::id_target`] on the inner
+    /// link. ID targets are never rewritten by a move.
+    pub fn id_target(&self) -> Option<crate::identity::Id> {
+        self.link.id_target()
+    }
+}
+
+/// Scan `body` for **every** link a move or a check must account for — Obsidian
+/// `[[…]]` wikilinks *and* markdown/djot `[label](target)` links — each as a
+/// [`BodyLink`] in source order. This is the single body-scan seam
+/// `census`/`check`/rename use; it supersedes the wikilink-only
+/// [`scan_wikilinks`] for callers that must also see markdown/djot links.
+///
+/// Two syntaxes, two finders, both code-aware:
+/// - **Wikilinks** come from the lexical [`scan_wikilinks`] scan (code spans
+///   excluded at the source, so a `[[` inside a fence can never eat a later real
+///   link).
+/// - **Markdown/djot links** come from `twig`'s parser
+///   ([`crate::content::link_spans`]): it reports the span of each real `link`
+///   node, so a `[x](y)` in a code fence, an autolink, or bracket text that is
+///   not a link is never returned. Each span holds exactly one link, so parsing
+///   it with [`Link::parse`] cannot over-reach across a stray `)` — the
+///   balanced-paren hazard the lexical parser has is structurally absent here.
+///   Only inline `[label](target)` links are kept (a successful markdown parse);
+///   reference-style and autolink forms are left for a later pass.
+///
+/// Falls back to wikilinks only when the extension names no `twig` grammar or the
+/// parse fails — the same graceful degradation [`scan_wikilinks`] already has.
+pub fn scan_body_links(path: &Path, body: &str) -> Vec<BodyLink> {
+    let mut out: Vec<BodyLink> = scan_wikilinks(path, body)
+        .into_iter()
+        .map(|wl| BodyLink {
+            link: Link { label: wl.label, target: wl.target, wikilink: true },
+            span: wl.span,
+        })
+        .collect();
+    for span in markdown_link_spans(path, body) {
+        let link = Link::parse(&body[span.clone()]);
+        // Keep only inline `[label](target)` links (a labeled markdown parse):
+        // reference/autolink spans parse to a bare or external target and are
+        // skipped. Defensively drop a span overlapping a wikilink we already have.
+        if link.label.is_none() || link.wikilink {
+            continue;
+        }
+        if out.iter().any(|b| b.span.start < span.end && span.start < b.span.end) {
+            continue;
+        }
+        out.push(BodyLink { link, span });
+    }
+    out.sort_by_key(|b| b.span.start);
+    out
+}
+
+/// The spans of markdown/djot inline links in `body`, via `twig` — empty when
+/// `path`'s extension names no grammar `twig` understands or the parse fails
+/// (the same degrade-to-lexical rule as [`code_spans_for`]).
+fn markdown_link_spans(path: &Path, body: &str) -> Vec<Range<usize>> {
+    let Some(format) = crate::content::ContentFormat::from_extension(path) else {
+        return Vec::new();
+    };
+    crate::content::link_spans(body, format).unwrap_or_default()
+}
+
 /// Sort-then-merge overlapping/adjacent ranges. `code_spans_for`'s sources
 /// don't currently nest or overlap (code-block/verbatim/raw nodes are AST
 /// leaves), but merging first keeps [`scan_outside_spans`] correct even if

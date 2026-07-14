@@ -337,8 +337,8 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                     }
                 }
             }
-            for wikilink in link::scan_wikilinks(&path, &doc.body) {
-                let link = Link::parse(&wikilink.target);
+            for body_link in link::scan_body_links(&path, &doc.body) {
+                let link = body_link.link;
                 if link.is_external() || title::is_alias_shaped(&link.target) {
                     continue;
                 }

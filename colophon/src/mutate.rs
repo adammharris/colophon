@@ -375,7 +375,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let mut self_text = if from.parent() != to.parent() {
             let meta_rewritten =
                 rerelativize(&from_text, &from_doc, self.relations().relations(), &from, &to)?;
-            rerelativize_body_wikilinks(&meta_rewritten, &from_doc.body, &from, &to)
+            rerelativize_body_links(&meta_rewritten, &from_doc.body, &from, &to)
         } else {
             from_text
         };
@@ -833,7 +833,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         } else {
             let (raw, _) = self.load(&body_from).await?;
             Some(if from.parent() != to.parent() {
-                rerelativize_body_wikilinks(&raw, &raw, &body_from, &body_to)
+                rerelativize_body_links(&raw, &raw, &body_from, &body_to)
             } else {
                 raw
             })
@@ -1067,14 +1067,17 @@ fn rerelativize(
     editor.render()
 }
 
-/// Re-relativize the path-form wikilinks in a moved document's body so they
-/// still resolve from `to`'s directory, then splice the rewritten body back into
+/// Re-relativize the path-form body links in a moved document's body —
+/// `[[wikilinks]]` and markdown/djot `[t](a)` links alike — so they still
+/// resolve from `to`'s directory, then splice the rewritten body back into
 /// `text` (the already-frontmatter-rewritten document). `body` is the moved
 /// document's verbatim prose, which MetaEditor preserved byte-for-byte, so it is
-/// still a contiguous run of `text`. `[[colophon:<id>]]` and external
+/// still a contiguous run of `text`. Id-form (`id:<id>`) and external
 /// (`scheme://…`) targets are left alone — neither depends on where the document
-/// lives. Returns `text` unchanged when the body has no rewritable wikilink.
-fn rerelativize_body_wikilinks(text: &str, body: &str, from: &Path, to: &Path) -> String {
+/// lives. Each link keeps its own wrapper on rewrite ([`Link::render`]), so a
+/// wikilink stays `[[…]]` and a markdown link stays `[label](…)`. Returns `text`
+/// unchanged when the body has no rewritable link.
+fn rerelativize_body_links(text: &str, body: &str, from: &Path, to: &Path) -> String {
     if body.is_empty() {
         return text.to_string();
     }
@@ -1082,18 +1085,18 @@ fn rerelativize_body_wikilinks(text: &str, body: &str, from: &Path, to: &Path) -
     let mut new_body = String::with_capacity(body.len());
     let mut cursor = 0;
     let mut rewrote = false;
-    for wl in link::scan_wikilinks(from, body) {
+    for bl in link::scan_body_links(from, body) {
         // ID-form (stable by construction) and external targets stay put; the
         // text between `cursor` and this span — including any such skipped
-        // wikilink — is copied verbatim by the next span's push (or the tail).
-        if wl.id_target().is_some() || Link::parse(&wl.target).is_external() {
+        // link — is copied verbatim by the next span's push (or the tail).
+        if bl.id_target().is_some() || bl.link.is_external() {
             continue;
         }
-        let resolved = link::resolve(from, &wl.target);
-        let retargeted = wl.with_target(link::relative(new_dir, &resolved)).render();
-        new_body.push_str(&body[cursor..wl.span.start]);
+        let resolved = link::resolve(from, &bl.link.target);
+        let retargeted = bl.link.with_target(link::relative(new_dir, &resolved)).render();
+        new_body.push_str(&body[cursor..bl.span.start]);
         new_body.push_str(&retargeted);
-        cursor = wl.span.end;
+        cursor = bl.span.end;
         rewrote = true;
     }
     if !rewrote {
@@ -1118,11 +1121,12 @@ fn splice_body(text: &str, old_body: &str, new_body: &str) -> String {
     }
 }
 
-/// Retarget the path-form body wikilinks in `source` that resolve to `from` so
-/// they reach `to` instead, splicing the result back into `text`. ID-form and
-/// external targets are left untouched. Rewrites right-to-left so each span
-/// stays valid as earlier ones are replaced. Returns `text` unchanged when no
-/// body wikilink pointed at `from`.
+/// Retarget the path-form body links in `source` that resolve to `from` so
+/// they reach `to` instead, splicing the result back into `text` — both
+/// `[[wikilinks]]` and markdown/djot `[t](a)` links. Id-form and external
+/// targets are left untouched. Rewrites right-to-left so each span stays valid
+/// as earlier ones are replaced. Returns `text` unchanged when no body link
+/// pointed at `from`.
 fn rewrite_body_inbound(text: &str, body: &str, source: &Path, from: &Path, to: &Path) -> String {
     if body.is_empty() {
         return text.to_string();
@@ -1130,15 +1134,15 @@ fn rewrite_body_inbound(text: &str, body: &str, source: &Path, from: &Path, to: 
     let source_dir = source.parent().unwrap_or(Path::new(""));
     let mut new_body = body.to_string();
     let mut changed = false;
-    for wikilink in link::scan_wikilinks(source, body).into_iter().rev() {
-        if wikilink.id_target().is_some() || Link::parse(&wikilink.target).is_external() {
+    for bl in link::scan_body_links(source, body).into_iter().rev() {
+        if bl.id_target().is_some() || bl.link.is_external() {
             continue;
         }
-        if link::resolve(source, &wikilink.target).as_path() != from {
+        if link::resolve(source, &bl.link.target).as_path() != from {
             continue;
         }
-        let retargeted = wikilink.with_target(link::relative(source_dir, to)).render();
-        new_body.replace_range(wikilink.span.clone(), &retargeted);
+        let retargeted = bl.link.with_target(link::relative(source_dir, to)).render();
+        new_body.replace_range(bl.span.clone(), &retargeted);
         changed = true;
     }
     if !changed {
@@ -1444,6 +1448,67 @@ mod tests {
         assert!(mid.ends_with(".\n"), "body preserved: {mid}");
         // Parent's spanning entry followed the move too.
         assert!(read(&dir, "index.md").contains("sub/mid.md"), "parent retargeted");
+    }
+
+    #[test]
+    fn rename_rerelativizes_markdown_body_links_and_spares_external_and_code() {
+        // Stage 2: real markdown `[label](path)` links in body prose are now
+        // maintained on a move, just like wikilinks — while an external URL and a
+        // link that is actually code (inside a fence) are left untouched.
+        let dir = tempdir("md-body-rerel");
+        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- mid.md\n---\n");
+        write(
+            &dir,
+            "mid.md",
+            "---\npart_of: index.md\n---\n\
+             See [the leaf](leaf.md) and [home](https://ex.com).\n\n\
+             ```\n[fake](leaf.md)\n```\n",
+        );
+        write(&dir, "leaf.md", "---\ntitle: Leaf\n---\n");
+
+        block_on(ws(&dir).rename(Path::new("mid.md"), Path::new("sub/mid.md"))).unwrap();
+
+        let mid = read(&dir, "sub/mid.md");
+        // The inline markdown link was re-relativized, label kept, wrapper kept.
+        assert!(mid.contains("[the leaf](../leaf.md)"), "{mid}");
+        // The external URL is untouched.
+        assert!(mid.contains("[home](https://ex.com)"), "{mid}");
+        // The look-alike link inside the code fence must NOT be rewritten.
+        assert!(mid.contains("[fake](leaf.md)"), "code fence left alone: {mid}");
+        assert!(read(&dir, "index.md").contains("sub/mid.md"), "parent retargeted");
+    }
+
+    #[test]
+    fn check_diagnoses_a_broken_markdown_body_link() {
+        // A markdown body link to a missing file is now a broken-link finding —
+        // the diagnosis half of body-link ownership. A wikilink to nowhere was
+        // already caught; parity for markdown/djot links.
+        let dir = tempdir("md-body-check");
+        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- a.md\n---\n");
+        write(&dir, "a.md", "---\npart_of: index.md\n---\nSee [gone](nope.md).\n");
+
+        let findings = block_on(ws(&dir).check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(f,
+                Finding::BrokenLink { doc, site: LinkSite::Body(_), target }
+                    if doc == &PathBuf::from("a.md") && target == "nope.md")),
+            "expected a broken markdown body link, got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn rename_retargets_inbound_markdown_body_links() {
+        // A sibling references the moved doc with a markdown body link; the census
+        // finds it and the move retargets it — the inbound direction, for markdown.
+        let dir = tempdir("md-body-inbound");
+        write(&dir, "index.md", "---\ncontents:\n- a.md\n- b.md\n---\n");
+        write(&dir, "a.md", "---\npart_of: index.md\n---\n");
+        write(&dir, "b.md", "---\npart_of: index.md\n---\nAlso see [it](a.md) nearby.\n");
+
+        block_on(ws(&dir).rename(Path::new("a.md"), Path::new("sub/a.md"))).unwrap();
+
+        assert!(read(&dir, "b.md").contains("[it](sub/a.md)"), "inbound md link retargeted: {}", read(&dir, "b.md"));
+        assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 
     #[test]
