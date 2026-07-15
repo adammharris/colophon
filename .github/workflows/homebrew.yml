@@ -29,7 +29,7 @@ jobs:
     runs-on: macos-latest
     if: github.ref_type == 'tag'
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
     - uses: mlugg/setup-zig@v2
@@ -43,7 +43,7 @@ jobs:
         cargo build --release -p colophon-cli --target x86_64-apple-darwin
         tar -czf colophon-macos-x86_64.tar.gz -C target/x86_64-apple-darwin/release colophon
     - name: Attach to the GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref_name }}
         files: |
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
     - uses: mlugg/setup-zig@v2
@@ -72,7 +72,7 @@ jobs:
         cargo build --release -p colophon-cli --target aarch64-unknown-linux-gnu
         tar -czf colophon-linux-aarch64.tar.gz -C target/aarch64-unknown-linux-gnu/release colophon
     - name: Attach to the GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref_name }}
         files: |
