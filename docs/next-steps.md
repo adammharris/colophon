@@ -196,7 +196,7 @@ format-agnosticism, made an action). Decided this session:
 
 ## Routes (`route.rs`)
 
-Landed: `colophon new --under Daily/2026/2026-07 -p`. The position taken, so it
+Landed: `colophon new --in-title Daily/2026/2026-07 -p`. The position taken, so it
 doesn't get relitigated: **the workflow is not colophon's to own.** A `daily`
 command would bake diaryx vocabulary into the core (§2/§9), and a workflow DSL in
 `colophon.yaml` would be worse — it would restate, in config, a fact the links
@@ -214,7 +214,7 @@ maintained); a two-line alias supplies the dates.
   routes, so nested wins. Note the *terminal* document is unaffected either way —
   it always lands beside its resolved parent — so this never contradicts `create`.
 - **Route addressing is `new`-only so far.** `mv`, `attach`, `duplicate`, and
-  `adopt` all name a parent by path and would take `--under` the same way. Worth
+  `adopt` all name a parent by path and would take `--in-title` the same way. Worth
   doing once the segment/route surface has proven out; `route_segments` +
   `plan_route` are already the whole seam.
 - **The synthesis seam is still un-extracted (deliberate, but the debt is now
@@ -224,7 +224,7 @@ maintained); a two-line alias supplies the dates.
   because the two differ in the ways that matter — a plan of one chain vs. a
   forest, abort-on-failure vs. collect-and-continue — and a premature
   `Plan`/`Apply` trait would have to paper over both. Revisit when a third
-  synthesizer appears, or when `--under` spreads to the other mutations.
+  synthesizer appears, or when `--in-title` spreads to the other mutations.
 - **Title matching is exact and case-sensitive.** `Daily/2026` won't find a node
   titled `daily`. Deliberate (addressing that guesses is worse than addressing
   that misses), but a `--fuzzy`/case-insensitive fallback that *reports* what it
@@ -295,6 +295,83 @@ added, since `reparent --in` already links an orphan.
   by moving its root, which is the whole point of a spanning tree. Bulk reparenting
   (every `2026-07-*` under a new month) is a shell loop today and probably should
   stay one.
+- **A path passed to `--in-title` is caught, but only because a file is decisive.**
+  `--in-path` takes a path and `--in-title` takes a route, and the two are spelled
+  identically — so in a workspace whose index titles mirror their directory names
+  (`2026` in `2026/`), a path handed to `--in-title` resolves segment after segment as
+  a route and dies only on the filename, reading as "the route nearly worked". The
+  check is narrow on purpose: *the string names an existing **file***. Routes name
+  nodes by title, so a route that is also a filename means the wrong flag; and a
+  directory (`Daily/2026/07`) must not trip it, since that is a perfectly good route
+  and the exact workflow the feature exists for. Nothing softer would be safe — the
+  slug of `index.md` is `indexmd`, so `-p` would have cheerfully created
+  `daily/2026/07/indexmd/index.md` titled "index.md".
+
+## The CLI target grammar
+
+Landed, replacing `--in-path`/`--in-title` (which had themselves replaced
+`--in`/`--under`/`--parent` days earlier — the churn is itself the evidence). A
+document argument now declares its addressing mode in the **value**:
+
+| spelling | mode | needs a workspace |
+| --- | --- | --- |
+| `daily.md` | path | no |
+| `@Daily/2026/08` | route of titles from the root (bare `@` = the root) | yes |
+| `id:fpk38j` (or legacy `colophon:`) | registry handle | yes |
+
+This is not a new idea — it is the library's own. `Addressing::{Path, Id, Alias}`
+and `Link::parse` have always disambiguated a target by its syntax; the CLI had
+been reinventing the same distinction as flag names, one layer up, incompatibly.
+
+Why flags could never have worked, stated once so it isn't retried:
+
+- **Cost is N modes × M slots.** Two flags covered two of three modes on one
+  argument. Adding ids meant `--in-id`, and `Addressing` is an open enum.
+- **It could only ever reach the parent.** A *subject* positional has no flag to
+  spare, so every subject was path-only — `reparent <PATH>`, `rm <PATH>`,
+  `show <FILE>`, ~17 arguments in all. Backwards: the subject is the thing you
+  know by meaning ("the July 14 entry"), the destination is the thing you'd more
+  plausibly know by path.
+- **`--in-title` mislabelled itself.** In the library, title-addressing is
+  `Addressing::Alias` — *one* name, resolved globally through `TitleIndex`, with
+  §8's scan hazard. A route is a *bounded walk through many titles*: different
+  mechanism, different hazard, and plural. The flag name papered over a real
+  distinction that `@` leaves visible.
+
+Design notes worth keeping:
+
+- **Root discovery is lazy, and that is load-bearing.** `show`/`links`/`meta`/
+  `get`/`body`/`render`/`set`/`unset` were workspace-*free*: they read a file, from
+  anywhere, workspace or not. Resolving every argument through a workspace would
+  have quietly destroyed that. A path resolves with no root; only `@`/`id:` discover
+  one, because only they make the argument mean a *node* rather than a file.
+- **`-p` is refused on a non-route `--in`** rather than ignored. A path or id names
+  something that must already exist; `-p` beside one is a mistake, not a no-op.
+- **Subjects never synthesize.** Only a `--in` destination may be created, and only
+  with `-p`. A subject that does not resolve is a mistake, never an instruction.
+- **`ArgGroup` disappeared entirely.** The mutually-exclusive placement group only
+  existed to stop two flags naming the same thing. A grammar makes that
+  unrepresentable — good evidence the shape is right rather than merely different.
+- **`@` needs an escape and has one:** a file literally called `@foo.md` is
+  `./@foo.md`, since only a *leading* `@` is stripped. Pinned by test.
+
+Still flag-shaped and unfinished: `attach`'s `<PAYLOAD>` stays a path on purpose (a
+binary has no title and no id), and `mv`'s `<TO>` stays a path (it names a location
+that does not exist yet — there is nothing to address). `new`'s positional is a
+title for the *new* document, not a reference. Those three are correct as paths; the
+rest of the surface now speaks one grammar.
+
+## CLI test coverage is one file old
+
+`colophon-cli/tests/targets.rs` is the **first** test over the binary; before it,
+every CLI behaviour — flag vocabulary, output, exit codes, the interview — was
+untested, which is why `--in`/`--in-title` confusion shipped twice. The library is well
+covered and the CLI is not, and the gap is not cosmetic: the bugs that reached a real
+workspace this cycle (a route silently synthesizing a competing spine, an error
+naming a nonexistent `adopt` command, a path accepted as a route) were *all* CLI-layer
+and *all* invisible to library tests, because in each case the library did exactly
+what it was asked. Worth extending to the other placement-taking commands and to
+`init`'s adoption paths.
 
 ## Index naming is hardcoded in three places
 

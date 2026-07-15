@@ -13,12 +13,12 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
-use colophon::tree::{Node, NodeKind};
+use clap::{Parser, Subcommand, ValueEnum};
 use colophon::document::MetaCarrier;
+use colophon::tree::{Node, NodeKind};
 use colophon::{
     Addressing, Adoption, ContentFormat, Document, EmbedStyle, FileIndex, Format, Id, IdStorage,
-    IndexStore, Layout, LinkStyle, Mapping, Minter, Registration, RelationStyleConfig, RelationSet,
+    IndexStore, Layout, LinkStyle, Mapping, Minter, Registration, RelationSet, RelationStyleConfig,
     RoutePlan, StdFs, StructurePlan, SynthNode, Target, Trigger, Value, Workspace, WorkspaceConfig,
     Wrapper, block_on, edit, link, meta,
 };
@@ -160,12 +160,14 @@ enum Command {
     /// Summarize a document: its metadata, spanning children, and declared links.
     Show {
         /// Path to a document (plaintext with embedded metadata).
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
     },
     /// List a document's links as `relation<TAB>target`, one per line.
     Links {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
         /// Only show links declared by this relation (e.g. `contents`).
         #[arg(long)]
         relation: Option<String>,
@@ -173,7 +175,8 @@ enum Command {
     /// Print a document's metadata block (without fences).
     Meta {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
         /// Output format (default: the format the document already uses).
         #[arg(long, value_enum)]
         format: Option<MetaFormat>,
@@ -181,25 +184,29 @@ enum Command {
     /// Print one metadata field by dotted path (e.g. `title`, `contents.0`).
     Get {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
         /// Dotted key path; an all-digit segment indexes a sequence.
         key: String,
     },
     /// Print a document's body (everything outside the metadata block).
     Body {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
     },
     /// Render a document's body to HTML (Markdown/Djot, via `twig`).
     Render {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
     },
     /// Set a metadata field (comment- and format-preserving; creates the
     /// block when the document has none).
     Set {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
         /// Dotted key path.
         key: String,
         /// Value; `true`/`false`, integers, floats, and `null` are typed,
@@ -209,14 +216,16 @@ enum Command {
     /// Remove a metadata field (comment- and format-preserving).
     Unset {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
         /// Dotted key path.
         key: String,
     },
     /// Print the containment tree that unfolds from a root document.
     Tree {
         /// The document to discover from (default: the workspace root).
-        root: Option<PathBuf>,
+        #[arg(value_name = "TARGET")]
+        root: Option<String>,
     },
     /// Interactively explore the workspace: view a document and follow any of its
     /// links — or its backlinks — moving through the graph from the terminal.
@@ -229,7 +238,8 @@ enum Command {
     /// findings.
     Check {
         /// The document to check from (default: the workspace root).
-        root: Option<PathBuf>,
+        #[arg(value_name = "TARGET")]
+        root: Option<String>,
         /// Interactively repair fixable findings (currently: missing inverse
         /// links). Metadata edits only — body-link findings are left for a
         /// structure-aware pass, so code that looks like a link is never touched.
@@ -242,24 +252,18 @@ enum Command {
     /// parent's directory, and records the title in the document's metadata,
     /// where structure lives. Override the derived filename with `--as` (an exact
     /// path) or just its extension with `--ext`.
-    #[command(group(ArgGroup::new("placement").required(true).args(["in_doc", "under"])))]
     New {
         /// Title of the new document (recorded in its metadata; a readable
         /// filename is slugged from it unless `--as` overrides).
         title: String,
-        /// The parent document, by path (gains a spanning link to the new file).
-        /// `--parent` still works as an alias.
-        #[arg(long = "in", short = 'i', alias = "parent", value_name = "DOC")]
-        in_doc: Option<PathBuf>,
-        /// The parent by its *route through the containment tree* instead of its
-        /// path: `Daily/2026/2026-07`, each segment the title of a child of the
-        /// last, walked from the workspace root. Missing segments are an error
-        /// unless `-p`.
-        #[arg(long, short = 'u', value_name = "ROUTE")]
-        under: Option<String>,
+        /// The parent document that gains a spanning link to the new one: a path
+        /// (`daily.md`), a title route (`@Daily/2026/07`), or an id
+        /// (`id:fpk38j`). A route's missing segments are an error unless `-p`.
+        #[arg(long = "in", short = 'i', value_name = "TARGET")]
+        in_target: String,
         /// Create any route segments that don't exist yet, linked into the tree —
-        /// `mkdir -p` for containment. Only meaningful with `--under`.
-        #[arg(long = "parents", short = 'p', requires = "under")]
+        /// `mkdir -p` for containment. Only meaningful when `--in` is a route.
+        #[arg(long = "parents", short = 'p', requires = "in_target")]
         parents: bool,
         /// Where `-p` writes the nodes it creates: `nested` (a directory per
         /// segment, `daily/2026/index.md`) or `flat` (all beside the start,
@@ -267,8 +271,8 @@ enum Command {
         /// either way (default: nested).
         #[arg(long, value_enum, default_value_t = LayoutArg::Nested, requires = "parents")]
         layout: LayoutArg,
-        /// Print what `--under` resolves to and what `-p` would create, then stop.
-        #[arg(long, requires = "under")]
+        /// Print what `--in` resolves to and what `-p` would create, then stop.
+        #[arg(long, requires = "in_target")]
         dry_run: bool,
         /// Use this exact workspace path instead of a title-derived name (the
         /// title is still taken from the positional). Wins over `--ext`.
@@ -288,10 +292,18 @@ enum Command {
         /// readable document should be created with `new` (it carries its own
         /// metadata) rather than shadowed by a sidecar. Omit with `--all`.
         payload: Option<PathBuf>,
-        /// The parent document that gains a spanning link to the attachment
-        /// (default: the workspace root).
-        #[arg(long, short)]
-        parent: Option<PathBuf>,
+        /// The parent that gains a spanning link to the attachment (default: the
+        /// workspace root): a path (`daily.md`), a title route
+        /// (`@Daily/2026/07`), or an id (`id:fpk38j`).
+        #[arg(long = "in", short = 'i', value_name = "TARGET")]
+        in_target: Option<String>,
+        /// Create any route segments that don't exist yet — `mkdir -p` for
+        /// containment. Only meaningful when `--in` is a route.
+        #[arg(long = "parents", short = 'p', requires = "in_target")]
+        parents: bool,
+        /// Where `-p` writes the nodes it creates. File placement only.
+        #[arg(long, value_enum, default_value_t = LayoutArg::Nested, requires = "parents")]
+        layout: LayoutArg,
         /// Attach every loose file under the workspace — each opaque file that
         /// has no sidecar yet — instead of a single payload. Bounded to the
         /// directories the workspace already reaches (an unlinked subtree, a
@@ -310,23 +322,21 @@ enum Command {
     /// overlay links, body wikilinks) and the document's own relative links.
     ///
     /// Moves the *file* and preserves the document's place in the tree. To change
-    /// its place in the tree instead, see `reparent` — or pass `--in`/`--under`
+    /// its place in the tree instead, see `reparent` — or pass `--in`
     /// here to do both at once.
     Mv {
-        /// Current path.
-        from: PathBuf,
+        /// The document to move: a path, a title route (`@Daily/2026/07`), or an
+        /// id (`id:fpk38j`).
+        #[arg(value_name = "TARGET")]
+        from: String,
         /// New path.
         to: PathBuf,
         /// Also reparent under this document — the file moves *and* changes
-        /// parent. Equivalent to `mv` followed by `reparent`.
-        #[arg(long = "in", short = 'i', value_name = "DOC")]
-        in_doc: Option<PathBuf>,
-        /// Also reparent under the node this route addresses (titles separated by
-        /// `/`, walked from the workspace root).
-        #[arg(long, short = 'u', value_name = "ROUTE", conflicts_with = "in_doc")]
-        under: Option<String>,
-        /// Create missing route segments (with `--under`), like `mkdir -p`.
-        #[arg(long = "parents", short = 'p', requires = "under")]
+        /// parent. A path, a title route (`@Daily/2026/08`), or an id.
+        #[arg(long = "in", short = 'i', value_name = "TARGET")]
+        in_target: Option<String>,
+        /// Create missing route segments (when `--in` is a route), like `mkdir -p`.
+        #[arg(long = "parents", short = 'p', requires = "in_target")]
         parents: bool,
         /// Where `--parents` writes the nodes it synthesizes. Placement only —
         /// never the graph.
@@ -345,33 +355,33 @@ enum Command {
     /// The old parent's entry is removed and the new one's added, so the document
     /// is never contained twice. An unparented document is accepted: there is
     /// nothing to remove, so this simply links it in.
-    #[command(group(ArgGroup::new("destination").required(true).args(["in_doc", "under"])))]
     Reparent {
-        /// Path of the document to reparent.
-        path: PathBuf,
-        /// The new parent document.
-        #[arg(long = "in", short = 'i', value_name = "DOC")]
-        in_doc: Option<PathBuf>,
-        /// The new parent, addressed by route (titles separated by `/`, walked
-        /// from the workspace root).
-        #[arg(long, short = 'u', value_name = "ROUTE")]
-        under: Option<String>,
-        /// Create missing route segments (with `--under`), like `mkdir -p`.
-        #[arg(long = "parents", short = 'p', requires = "under")]
+        /// The document to reparent: a path, a title route (`@Daily/2026/07`), or
+        /// an id (`id:fpk38j`).
+        #[arg(value_name = "TARGET")]
+        path: String,
+        /// The new parent: a path (`daily.md`), a title route
+        /// (`@Daily/2026/08`), or an id (`id:fpk38j`).
+        #[arg(long = "in", short = 'i', value_name = "TARGET")]
+        in_target: String,
+        /// Create missing route segments (when `--in` is a route), like `mkdir -p`.
+        #[arg(long = "parents", short = 'p', requires = "in_target")]
         parents: bool,
         /// Where `--parents` writes the nodes it synthesizes. Placement only —
         /// never the graph.
         #[arg(long, value_enum, default_value_t = LayoutArg::Nested, requires = "parents")]
         layout: LayoutArg,
         /// Show what the route resolves to without changing anything.
-        #[arg(long, requires = "under")]
+        #[arg(long, requires = "in_target")]
         dry_run: bool,
     },
     /// Delete a document, removing its parent's spanning entry. Refuses when
     /// the document has children unless --force.
     Rm {
-        /// Path of the document to delete.
-        path: PathBuf,
+        /// The document to delete: a path, a title route (`@Daily/2026/07`), or an
+        /// id (`id:fpk38j`).
+        #[arg(value_name = "TARGET")]
+        path: String,
         /// Delete even when the document still contains children (orphans them).
         #[arg(long)]
         force: bool,
@@ -385,7 +395,8 @@ enum Command {
     /// documents' to convert; `-r` also converts this file's spanning subtree.
     Convert {
         /// The document to convert.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
         /// The config axis to convert. Currently only `link_format`.
         axis: String,
         /// The target value (e.g. `plain_relative`).
@@ -401,8 +412,10 @@ enum Command {
     /// left with two parents). A separated node's body file is copied too.
     #[command(alias = "dup")]
     Duplicate {
-        /// Path of the document to duplicate.
-        source: PathBuf,
+        /// The document to duplicate: a path, a title route (`@Daily/2026/07`), or
+        /// an id (`id:fpk38j`).
+        #[arg(value_name = "TARGET")]
+        source: String,
     },
     /// Ensure a document has a stable ID and print its `colophon:<id>` target.
     /// Registers it in the workspace's registry document (bootstrapping
@@ -410,7 +423,8 @@ enum Command {
     /// target from any document and it survives moves.
     Id {
         /// Path to a document.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
     },
     /// Resolve a stable ID (with or without the `colophon:` prefix) to its
     /// current path.
@@ -422,7 +436,8 @@ enum Command {
     /// workspace, as `source<TAB>site<TAB>path|id`.
     Backlinks {
         /// The document whose backlinks to list.
-        file: PathBuf,
+        #[arg(value_name = "TARGET")]
+        file: String,
     },
     /// Get or set workspace config (e.g. `link_format`, `identity`). With a
     /// value, writes it to the linked config document — creating and linking
@@ -511,13 +526,17 @@ impl ContentLang {
     /// in a sibling file.
     fn embed_styles(self) -> &'static [EmbedStyle] {
         match self {
-            ContentLang::Markdown => {
-                &[EmbedStyle::Delimited, EmbedStyle::CodeBlock, EmbedStyle::Separate]
-            }
+            ContentLang::Markdown => &[
+                EmbedStyle::Delimited,
+                EmbedStyle::CodeBlock,
+                EmbedStyle::Separate,
+            ],
             ContentLang::Djot => &[EmbedStyle::CodeBlock, EmbedStyle::Separate],
-            ContentLang::Html => {
-                &[EmbedStyle::HtmlScript, EmbedStyle::HtmlCode, EmbedStyle::Separate]
-            }
+            ContentLang::Html => &[
+                EmbedStyle::HtmlScript,
+                EmbedStyle::HtmlCode,
+                EmbedStyle::Separate,
+            ],
         }
     }
 
@@ -843,12 +862,14 @@ impl From<MetaFormat> for Format {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Show { file } => cmd_show(&file),
-        Command::Links { file, relation } => cmd_links(&file, relation.as_deref()),
-        Command::Meta { file, format } => cmd_meta(&file, format),
-        Command::Get { file, key } => cmd_get(&file, &key),
-        Command::Body { file } => cmd_body(&file),
-        Command::Render { file } => cmd_render(&file),
+        Command::Show { file } => resolve_target(&file).and_then(|f| cmd_show(&f)),
+        Command::Links { file, relation } => {
+            resolve_target(&file).and_then(|f| cmd_links(&f, relation.as_deref()))
+        }
+        Command::Meta { file, format } => resolve_target(&file).and_then(|f| cmd_meta(&f, format)),
+        Command::Get { file, key } => resolve_target(&file).and_then(|f| cmd_get(&f, &key)),
+        Command::Body { file } => resolve_target(&file).and_then(|f| cmd_body(&f)),
+        Command::Render { file } => resolve_target(&file).and_then(|f| cmd_render(&f)),
         Command::Init {
             dir,
             title,
@@ -880,43 +901,76 @@ fn main() -> ExitCode {
             attach,
             yes,
         ),
-        Command::Set { file, key, value } => cmd_set(&file, &key, &value),
-        Command::Unset { file, key } => cmd_unset(&file, &key),
-        Command::Tree { root } => cmd_tree(root.as_deref()),
+        Command::Set { file, key, value } => {
+            resolve_target(&file).and_then(|f| cmd_set(&f, &key, &value))
+        }
+        Command::Unset { file, key } => resolve_target(&file).and_then(|f| cmd_unset(&f, &key)),
+        Command::Tree { root } => root
+            .map(|r| resolve_target(&r))
+            .transpose()
+            .and_then(|r| cmd_tree(r.as_deref())),
         Command::Explore { file } => cmd_explore(file.as_deref()),
-        Command::Check { root, fix } => cmd_check(root.as_deref(), fix),
-        Command::New { title, in_doc, under, parents, layout, dry_run, as_path, ext } => cmd_new(
+        Command::Check { root, fix } => root
+            .map(|r| resolve_target(&r))
+            .transpose()
+            .and_then(|r| cmd_check(r.as_deref(), fix)),
+        Command::New {
+            title,
+            in_target,
+            parents,
+            layout,
+            dry_run,
+            as_path,
+            ext,
+        } => cmd_new(
             &title,
-            in_doc.as_deref(),
-            under.as_deref(),
+            &in_target,
             parents,
             layout.into(),
             dry_run,
             as_path.as_deref(),
             ext.as_deref(),
         ),
-        Command::Attach { payload, parent, all, recursive } => {
-            cmd_attach(payload.as_deref(), parent.as_deref(), all, recursive)
-        }
-        Command::Mv { from, to, in_doc, under, parents, layout } => {
-            cmd_mv(&from, &to, in_doc.as_deref(), under.as_deref(), parents, layout.into())
-        }
-        Command::Reparent { path, in_doc, under, parents, layout, dry_run } => cmd_reparent(
-            &path,
-            in_doc.as_deref(),
-            under.as_deref(),
+        Command::Attach {
+            payload,
+            in_target,
+            parents,
+            layout,
+            all,
+            recursive,
+        } => cmd_attach(
+            payload.as_deref(),
+            in_target.as_deref(),
             parents,
             layout.into(),
-            dry_run,
+            all,
+            recursive,
         ),
+        Command::Mv {
+            from,
+            to,
+            in_target,
+            parents,
+            layout,
+        } => cmd_mv(&from, &to, in_target.as_deref(), parents, layout.into()),
+        Command::Reparent {
+            path,
+            in_target,
+            parents,
+            layout,
+            dry_run,
+        } => cmd_reparent(&path, &in_target, parents, layout.into(), dry_run),
         Command::Rm { path, force } => cmd_rm(&path, force),
         Command::Duplicate { source } => cmd_duplicate(&source),
-        Command::Convert { file, axis, value, recursive } => {
-            cmd_convert(&file, &axis, &value, recursive)
-        }
-        Command::Id { file } => cmd_id(&file),
+        Command::Convert {
+            file,
+            axis,
+            value,
+            recursive,
+        } => resolve_target(&file).and_then(|f| cmd_convert(&f, &axis, &value, recursive)),
+        Command::Id { file } => resolve_target(&file).and_then(|f| cmd_id(&f)),
         Command::Resolve { id } => cmd_resolve(&id),
-        Command::Backlinks { file } => cmd_backlinks(&file),
+        Command::Backlinks { file } => resolve_target(&file).and_then(|f| cmd_backlinks(&f)),
         Command::Config { key, value } => cmd_config(key.as_deref(), value.as_deref()),
     };
     match result {
@@ -960,7 +1014,9 @@ fn find_root() -> Result<Ctx, AnyError> {
     let cwd = std::env::current_dir()?;
     for dir in cwd.ancestors() {
         let mut candidates: Vec<String> = Vec::new();
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let is_content_ext = path
@@ -977,16 +1033,19 @@ fn find_root() -> Result<Ctx, AnyError> {
                 continue;
             }
             if is_meta_ext && !is_content_ext {
-                let stem_ok = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|s| s.eq_ignore_ascii_case("index") || s.eq_ignore_ascii_case("readme"));
+                let stem_ok = path.file_stem().and_then(|s| s.to_str()).is_some_and(|s| {
+                    s.eq_ignore_ascii_case("index") || s.eq_ignore_ascii_case("readme")
+                });
                 if !stem_ok {
                     continue;
                 }
             }
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let Ok(doc) = Document::parse(&path, &text) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(doc) = Document::parse(&path, &text) else {
+                continue;
+            };
             if doc.has_meta() && doc.meta.get("part_of").is_none() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     candidates.push(name.to_string());
@@ -1029,7 +1088,12 @@ fn find_root() -> Result<Ctx, AnyError> {
                 {
                     config.apply(&doc.meta);
                 }
-                return Ok(Ctx { root_dir, root_doc, registry, config });
+                return Ok(Ctx {
+                    root_dir,
+                    root_doc,
+                    registry,
+                    config,
+                });
             }
             None if candidates.len() > 1 => {
                 return Err(format!(
@@ -1042,9 +1106,11 @@ fn find_root() -> Result<Ctx, AnyError> {
             None => continue,
         }
     }
-    Err("no workspace root found: no ancestor directory has a .md document \
+    Err(
+        "no workspace root found: no ancestor directory has a .md document \
 with metadata and no part_of"
-        .into())
+            .into(),
+    )
 }
 
 /// The workspace the multi-document commands drive: rooted at the discovered
@@ -1123,9 +1189,18 @@ fn ensure_registry(ctx: &mut Ctx) -> Result<(), AnyError> {
     let root_full = ctx.root_dir.join(&ctx.root_doc);
     let text = std::fs::read_to_string(&root_full)?;
     let doc = Document::parse(&ctx.root_doc, &text)?;
-    let updated = edit::set_in_text(&text, doc.carrier, "registry", edit::infer_scalar(&registry_name))?;
+    let updated = edit::set_in_text(
+        &text,
+        doc.carrier,
+        "registry",
+        edit::infer_scalar(&registry_name),
+    )?;
     std::fs::write(&root_full, updated)?;
-    eprintln!("initialized {} (linked from {})", registry_rel.display(), ctx.root_doc.display());
+    eprintln!(
+        "initialized {} (linked from {})",
+        registry_rel.display(),
+        ctx.root_doc.display()
+    );
     ctx.registry = Some(registry_rel);
     Ok(())
 }
@@ -1170,8 +1245,11 @@ fn persist(ctx: &Ctx, ws: &mut Workspace<StdFs, Minter, FileIndex>) -> Result<()
 /// back-fills a workspace that just switched to frontmatter storage and records
 /// freshly-minted IDs. A tombstoned ID has no live path and is skipped.
 fn stamp_ids(ctx: &Ctx, ws: &mut Workspace<StdFs, Minter, FileIndex>) -> Result<(), AnyError> {
-    let pairs: Vec<(Id, PathBuf)> =
-        ws.index().iter().map(|(id, path)| (id.clone(), path.clone())).collect();
+    let pairs: Vec<(Id, PathBuf)> = ws
+        .index()
+        .iter()
+        .map(|(id, path)| (id.clone(), path.clone()))
+        .collect();
     for (id, rel) in pairs {
         let full = ctx.root_dir.join(&rel);
         let Ok(text) = std::fs::read_to_string(&full) else {
@@ -1188,6 +1266,98 @@ fn stamp_ids(ctx: &Ctx, ws: &mut Workspace<StdFs, Minter, FileIndex>) -> Result<
         std::fs::write(&full, updated)?;
     }
     Ok(())
+}
+
+/// How a CLI argument names a document — the addressing mode carried by the
+/// *value*, not by which flag it was passed to.
+///
+/// This mirrors the library's [`Addressing`](colophon::Addressing) (`Path`/`Id`/
+/// `Alias`) and its `Link::parse`, which have always disambiguated a target by its
+/// own syntax. The CLI briefly did it with flag names instead (`--in-path` vs
+/// `--in-title`), which cost a flag per mode per argument and could only ever be
+/// afforded on *one* argument — the parent — leaving every subject path-only. A
+/// grammar costs one flag total and works in every slot, including subjects.
+///
+/// The spellings are chosen so a bare path stays a bare path: `id:` is the
+/// library's own [`ID_SCHEME`](colophon::link::ID_SCHEME), and `@` is not legal at
+/// the start of a *relative* path anyone writes by habit. A file genuinely named
+/// `@foo.md` is still addressable as `./@foo.md`, which parses as a path.
+#[derive(Debug, PartialEq, Eq)]
+enum TargetSpec<'a> {
+    /// A filesystem path — the default, and the only mode that needs no workspace.
+    Path(&'a str),
+    /// `id:<id>` (or the legacy `colophon:<id>`) — resolved through the registry.
+    Id(&'a str),
+    /// `@Daily/2026/08` — a route of titles walked from the workspace root. Bare
+    /// `@` is the root document itself.
+    Route(&'a str),
+}
+
+/// Classify a CLI target. Pure text: no filesystem, no workspace, no guessing —
+/// the string says which mode it is or it is a path.
+fn parse_target(s: &str) -> TargetSpec<'_> {
+    if let Some(id) = link::strip_id_scheme(s) {
+        return TargetSpec::Id(id);
+    }
+    match s.strip_prefix('@') {
+        Some(route) => TargetSpec::Route(route),
+        None => TargetSpec::Path(s),
+    }
+}
+
+/// Resolve a target that names an *existing* document, to a path this process can
+/// open (absolute for id/route, as-written for a path).
+///
+/// Root discovery is **lazy**: a plain path resolves without one, so `show`,
+/// `meta`, `get`, `body`, `links`, `render`, `set`, and `unset` keep working on any
+/// file anywhere — outside a workspace, in a tarball, wherever. Only `@` and `id:`
+/// need a workspace, and only then is one discovered. That property is worth
+/// keeping: those commands read a *file*, and only the other modes make the
+/// argument mean a *node*.
+fn resolve_target(s: &str) -> Result<PathBuf, AnyError> {
+    match parse_target(s) {
+        TargetSpec::Path(p) => Ok(PathBuf::from(p)),
+        TargetSpec::Id(id) => {
+            let ctx = find_root()?;
+            let ws = workspace(&ctx)?;
+            let id = Id(id.to_string());
+            match ws.index().resolve(&id) {
+                Some(path) => Ok(ctx.root_dir.join(path)),
+                None if ws.index().is_tombstoned(&id) => {
+                    Err(format!("{id} is tombstoned — its document was deleted").into())
+                }
+                None => Err(format!("{id} is not in the registry").into()),
+            }
+        }
+        TargetSpec::Route(route) => {
+            let ctx = find_root()?;
+            let ws = workspace(&ctx)?;
+            let terminal = resolve_route(&ctx, &ws, route)?;
+            Ok(ctx.root_dir.join(terminal))
+        }
+    }
+}
+
+/// Walk a route of titles to an existing node, workspace-relative. Refuses to
+/// create: a *subject* that does not exist is a mistake, never an instruction —
+/// only a `--in` destination may be synthesized, and only with `-p`.
+fn resolve_route(
+    ctx: &Ctx,
+    ws: &Workspace<StdFs, Minter, FileIndex>,
+    route: &str,
+) -> Result<PathBuf, AnyError> {
+    let segments = Workspace::<StdFs>::route_segments(route);
+    let plan = block_on(ws.plan_route(&ctx.root_doc, &segments, Layout::Nested))?;
+    if !plan.is_complete() {
+        let missing = &plan.synthesize[0];
+        return Err(format!(
+            "@{route} stops at {}: no child titled {:?}",
+            missing.parent.display(),
+            missing.title,
+        )
+        .into());
+    }
+    Ok(plan.terminal)
 }
 
 /// Re-anchor a (cwd-relative) CLI path to the discovered workspace root.
@@ -1275,10 +1445,17 @@ fn top_level_docs(dir: &Path) -> Vec<FoundDoc> {
                 .filter(Document::has_meta)
                 .map(|doc| {
                     let has_part_of = doc.meta.get("part_of").is_some();
-                    (has_part_of || doc.meta.get("contents").is_some(), !has_part_of)
+                    (
+                        has_part_of || doc.meta.get("contents").is_some(),
+                        !has_part_of,
+                    )
                 })
                 .unwrap_or((false, false));
-            FoundDoc { rel, structural, root_candidate }
+            FoundDoc {
+                rel,
+                structural,
+                root_candidate,
+            }
         })
         .collect()
 }
@@ -1323,7 +1500,11 @@ fn classify_dir(dir: &Path) -> (DirState, Vec<PathBuf>) {
     let mut docs = Vec::new();
     let mut others = Vec::new();
     scan_docs(dir, Path::new(""), &mut docs, &mut others);
-    let loose: Vec<PathBuf> = docs.into_iter().filter(|d| !d.structural).map(|d| d.rel).collect();
+    let loose: Vec<PathBuf> = docs
+        .into_iter()
+        .filter(|d| !d.structural)
+        .map(|d| d.rel)
+        .collect();
     let state = if loose.is_empty() {
         DirState::Greenfield
     } else {
@@ -1339,7 +1520,9 @@ fn classify_dir(dir: &Path) -> (DirState, Vec<PathBuf>) {
 /// entries (`.`-prefixed) are skipped, mirroring the library's scans; unreadable
 /// or unparsable content files count as plain (non-structural) content.
 fn scan_docs(dir: &Path, rel: &Path, docs: &mut Vec<FoundDoc>, others: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
@@ -1378,7 +1561,11 @@ fn scan_docs(dir: &Path, rel: &Path, docs: &mut Vec<FoundDoc>, others: &mut Vec<
                 (structural, !has_part_of)
             })
             .unwrap_or((false, false));
-        docs.push(FoundDoc { rel: child_rel, structural, root_candidate });
+        docs.push(FoundDoc {
+            rel: child_rel,
+            structural,
+            root_candidate,
+        });
     }
 }
 
@@ -1387,9 +1574,15 @@ fn scan_docs(dir: &Path, rel: &Path, docs: &mut Vec<FoundDoc>, others: &mut Vec<
 /// root-candidate. Two-plus candidates are ambiguous — `None`, and `init` won't
 /// guess.
 fn pick_root_candidate(docs: &[FoundDoc]) -> Option<PathBuf> {
-    let candidates: Vec<&PathBuf> = docs.iter().filter(|d| d.root_candidate).map(|d| &d.rel).collect();
+    let candidates: Vec<&PathBuf> = docs
+        .iter()
+        .filter(|d| d.root_candidate)
+        .map(|d| &d.rel)
+        .collect();
     let stem_is = |p: &Path, want: &str| {
-        p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case(want))
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case(want))
     };
     candidates
         .iter()
@@ -1406,11 +1599,19 @@ fn pick_root_candidate(docs: &[FoundDoc]) -> Option<PathBuf> {
 fn prompt_root_choice(docs: &[PathBuf]) -> Result<Option<PathBuf>, AnyError> {
     let mut sel = cliclack::select("Which file should be the workspace root?");
     for d in docs {
-        let name = d.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = d
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         sel = sel.item(d.clone(), name, "adopt this document as the root");
     }
     // The empty path is the "create a new index" sentinel.
-    sel = sel.item(PathBuf::new(), "Create a new index", "synthesize a fresh root document");
+    sel = sel.item(
+        PathBuf::new(),
+        "Create a new index",
+        "synthesize a fresh root document",
+    );
     let choice = sel.interact()?;
     Ok((!choice.as_os_str().is_empty()).then_some(choice))
 }
@@ -1422,7 +1623,12 @@ fn existing_doc_title(root_dir: &Path, rel: &Path) -> String {
     std::fs::read_to_string(root_dir.join(rel))
         .ok()
         .and_then(|t| Document::parse(rel, &t).ok())
-        .and_then(|d| d.meta.get("title").and_then(Value::as_str).map(str::to_owned))
+        .and_then(|d| {
+            d.meta
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| link::path_to_title(rel))
 }
 
@@ -1462,7 +1668,11 @@ fn dir_listing(root_dir: &Path, rel_dir: &Path) -> DirListing {
     docs.sort();
     others.sort();
     subdirs.sort();
-    DirListing { docs, others, subdirs }
+    DirListing {
+        docs,
+        others,
+        subdirs,
+    }
 }
 
 /// The node document a directory already has — an `index`- or `readme`-stemmed
@@ -1471,7 +1681,9 @@ fn dir_listing(root_dir: &Path, rel_dir: &Path) -> DirListing {
 fn existing_dir_node(root_dir: &Path, rel_dir: &Path) -> Option<PathBuf> {
     let listing = dir_listing(root_dir, rel_dir);
     let stem_is = |p: &Path, want: &str| {
-        p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case(want))
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case(want))
     };
     listing
         .docs
@@ -1512,19 +1724,39 @@ fn intake_walk(
     };
 
     // 1. Documents in this directory (excluding the node itself) → adopt under it.
-    let docs: Vec<PathBuf> = listing.docs.iter().filter(|d| d.as_path() != node).cloned().collect();
+    let docs: Vec<PathBuf> = listing
+        .docs
+        .iter()
+        .filter(|d| d.as_path() != node)
+        .cloned()
+        .collect();
     if !docs.is_empty() {
         let items: Vec<(PathBuf, String, String)> = docs
             .iter()
-            .map(|d| (d.clone(), d.file_name().unwrap_or_default().to_string_lossy().into_owned(), String::new()))
+            .map(|d| {
+                (
+                    d.clone(),
+                    d.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    String::new(),
+                )
+            })
             .collect();
-        let picked = cliclack::multiselect(format!("Documents in {here} to link under {}:", node.display()))
-            .items(&items)
-            .initial_values(docs.clone())
-            .required(false)
-            .interact()?;
+        let picked = cliclack::multiselect(format!(
+            "Documents in {here} to link under {}:",
+            node.display()
+        ))
+        .items(&items)
+        .initial_values(docs.clone())
+        .required(false)
+        .interact()?;
         for child in picked {
-            plan.adoptions.push(Adoption { child, parent: node.to_path_buf() });
+            plan.adoptions.push(Adoption {
+                child,
+                parent: node.to_path_buf(),
+            });
         }
     }
 
@@ -1533,12 +1765,22 @@ fn intake_walk(
         let items: Vec<(PathBuf, String, String)> = listing
             .others
             .iter()
-            .map(|f| (f.clone(), f.file_name().unwrap_or_default().to_string_lossy().into_owned(), String::new()))
+            .map(|f| {
+                (
+                    f.clone(),
+                    f.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    String::new(),
+                )
+            })
             .collect();
-        let picked = cliclack::multiselect(format!("Non-document files in {here} to give metadata:"))
-            .items(&items)
-            .required(false)
-            .interact()?;
+        let picked =
+            cliclack::multiselect(format!("Non-document files in {here} to give metadata:"))
+                .items(&items)
+                .required(false)
+                .interact()?;
         for payload in picked {
             attachments.push((payload, node.to_path_buf()));
         }
@@ -1549,7 +1791,13 @@ fn intake_walk(
         let items: Vec<(PathBuf, String, String)> = listing
             .subdirs
             .iter()
-            .map(|d| (d.clone(), format!("{}/", d.file_name().unwrap_or_default().to_string_lossy()), String::new()))
+            .map(|d| {
+                (
+                    d.clone(),
+                    format!("{}/", d.file_name().unwrap_or_default().to_string_lossy()),
+                    String::new(),
+                )
+            })
             .collect();
         let picked = cliclack::multiselect(format!("Subdirectories of {here} to include:"))
             .items(&items)
@@ -1560,7 +1808,10 @@ fn intake_walk(
             let child_node = match existing_dir_node(root_dir, &sub) {
                 // An existing index/readme becomes the node — adopt it under here.
                 Some(node_rel) => {
-                    plan.adoptions.push(Adoption { child: node_rel.clone(), parent: node.to_path_buf() });
+                    plan.adoptions.push(Adoption {
+                        child: node_rel.clone(),
+                        parent: node.to_path_buf(),
+                    });
                     node_rel
                 }
                 // No node yet — synthesize a folder-note titled after the folder.
@@ -1674,7 +1925,9 @@ fn cmd_init(
             // Whether the loose files span subdirectories — if so, a `mirror`
             // import (folder-as-node) is on the table; a single flat directory has
             // nothing to mirror, so only `flat` is offered.
-            let nested = docs.iter().any(|d| d.parent().is_some_and(|p| !p.as_os_str().is_empty()));
+            let nested = docs
+                .iter()
+                .any(|d| d.parent().is_some_and(|p| !p.as_os_str().is_empty()));
             match adopt {
                 Some(AdoptArg::Flat) => adopt_mode = Some(AdoptArg::Flat),
                 Some(AdoptArg::Mirror) => adopt_mode = Some(AdoptArg::Mirror),
@@ -1697,8 +1950,16 @@ fn cmd_init(
                         );
                     }
                     menu = menu
-                        .item("flat", "Adopt flat", "link every file directly under the new root")
-                        .item("leave", "Leave unlinked", "initialize anyway; colophon check will list them")
+                        .item(
+                            "flat",
+                            "Adopt flat",
+                            "link every file directly under the new root",
+                        )
+                        .item(
+                            "leave",
+                            "Leave unlinked",
+                            "initialize anyway; colophon check will list them",
+                        )
                         .item("cancel", "Cancel", "write nothing");
                     match menu.interact()? {
                         "mirror" => adopt_mode = Some(AdoptArg::Mirror),
@@ -1786,7 +2047,11 @@ fn cmd_init(
     // when loose documents are present to choose from.
     let root_pick: Option<PathBuf> = if use_walk {
         let top_docs = dir_listing(&dir, Path::new("")).docs;
-        if top_docs.is_empty() { None } else { prompt_root_choice(&top_docs)? }
+        if top_docs.is_empty() {
+            None
+        } else {
+            prompt_root_choice(&top_docs)?
+        }
     } else {
         None
     };
@@ -1879,9 +2144,21 @@ fn cmd_init(
         Some(i) => i,
         None if interactive => cliclack::select("Identity")
             .initial_value(IdentityArg::Lazy)
-            .item(IdentityArg::Lazy, "On demand", "an ID is minted when a document is linked by ID or published")
-            .item(IdentityArg::Off, "None", "documents are addressed by path only")
-            .item(IdentityArg::Eager, "From creation", "every document gets an ID when it is created")
+            .item(
+                IdentityArg::Lazy,
+                "On demand",
+                "an ID is minted when a document is linked by ID or published",
+            )
+            .item(
+                IdentityArg::Off,
+                "None",
+                "documents are addressed by path only",
+            )
+            .item(
+                IdentityArg::Eager,
+                "From creation",
+                "every document gets an ID when it is created",
+            )
             .interact()?,
         None => IdentityArg::Lazy,
     };
@@ -1949,7 +2226,11 @@ fn cmd_init(
     // file, or (for `separate`) a whole-file sibling node. Validated already, so
     // this never fails here.
     let carrier = colophon::embed_carrier(embed, meta_format).ok_or_else(|| {
-        format!("`{}` metadata cannot be embedded as `{}`", meta.label(), embed.as_config_str())
+        format!(
+            "`{}` metadata cannot be embedded as `{}`",
+            meta.label(),
+            embed.as_config_str()
+        )
     })?;
 
     // Write the root, and learn which file is the structural root document (the
@@ -1961,35 +2242,39 @@ fn cmd_init(
         root_doc.to_string_lossy().into_owned()
     } else {
         match carrier {
-        // Separate: a plain body file (heading only) plus a whole-file metadata
-        // node that points at it via `content` and carries the same title/author/
-        // config pointer a combined root would embed.
-        MetaCarrier::WholeFile(format) => {
-            let node_name = format!("index.{}", colophon::document::whole_file_extension(format));
-            std::fs::write(dir.join(&content_name), content.heading(&title))?;
-            let mut node = Mapping::new();
-            node.insert("title".into(), Value::String(title.clone()));
-            if let Some(author) = &author {
-                node.insert("author".into(), Value::String(author.clone()));
+            // Separate: a plain body file (heading only) plus a whole-file metadata
+            // node that points at it via `content` and carries the same title/author/
+            // config pointer a combined root would embed.
+            MetaCarrier::WholeFile(format) => {
+                let node_name =
+                    format!("index.{}", colophon::document::whole_file_extension(format));
+                std::fs::write(dir.join(&content_name), content.heading(&title))?;
+                let mut node = Mapping::new();
+                node.insert("title".into(), Value::String(title.clone()));
+                if let Some(author) = &author {
+                    node.insert("author".into(), Value::String(author.clone()));
+                }
+                node.insert("content".into(), Value::String(content_name.clone()));
+                node.insert("config".into(), Value::String(config_name.clone()));
+                std::fs::write(
+                    dir.join(&node_name),
+                    meta::serialize_mapping(&node, format)?,
+                )?;
+                node_name
             }
-            node.insert("content".into(), Value::String(content_name.clone()));
-            node.insert("config".into(), Value::String(config_name.clone()));
-            std::fs::write(dir.join(&node_name), meta::serialize_mapping(&node, format)?)?;
-            node_name
-        }
-        // Combined: one document, its block synthesized around the body (leading
-        // blank line = the conventional gap after a closing fence).
-        MetaCarrier::Fenced(_) => {
-            let body = format!("\n{}", content.heading(&title));
-            let mut editor = edit::MetaEditor::open_or_init(&body, Some(carrier))?;
-            editor.set_value(&edit::key_path("title"), edit::infer_scalar(&title))?;
-            if let Some(author) = &author {
-                editor.set_value(&edit::key_path("author"), edit::infer_scalar(author))?;
+            // Combined: one document, its block synthesized around the body (leading
+            // blank line = the conventional gap after a closing fence).
+            MetaCarrier::Fenced(_) => {
+                let body = format!("\n{}", content.heading(&title));
+                let mut editor = edit::MetaEditor::open_or_init(&body, Some(carrier))?;
+                editor.set_value(&edit::key_path("title"), edit::infer_scalar(&title))?;
+                if let Some(author) = &author {
+                    editor.set_value(&edit::key_path("author"), edit::infer_scalar(author))?;
+                }
+                editor.set_value(&edit::key_path("config"), edit::infer_scalar(&config_name))?;
+                std::fs::write(dir.join(&content_name), editor.render()?)?;
+                content_name.clone()
             }
-            editor.set_value(&edit::key_path("config"), edit::infer_scalar(&config_name))?;
-            std::fs::write(dir.join(&content_name), editor.render()?)?;
-            content_name.clone()
-        }
         }
     };
 
@@ -1998,14 +2283,22 @@ fn cmd_init(
     // style) plus the recorded preferences. A whole-file config document (DESIGN
     // §6/§7), the same shape as the registry.
     let config_rel = PathBuf::from(&config_name);
-    let part_of = link::format_link(ws_config.link_format, &config_rel, Path::new(&root_name), &title);
+    let part_of = link::format_link(
+        ws_config.link_format,
+        &config_rel,
+        Path::new(&root_name),
+        &title,
+    );
     let mut config_map = Mapping::new();
     config_map.insert("title".into(), Value::String("colophon config".into()));
     config_map.insert("part_of".into(), Value::String(part_of));
     for (key, value) in ws_config.to_mapping() {
         config_map.insert(key, value);
     }
-    std::fs::write(dir.join(&config_rel), meta::serialize_mapping(&config_map, meta_format)?)?;
+    std::fs::write(
+        dir.join(&config_rel),
+        meta::serialize_mapping(&config_map, meta_format)?,
+    )?;
 
     // An adopted existing root did not get a `config` pointer during synthesis
     // (it was not synthesized) — add it now, comment- and format-preservingly,
@@ -2014,7 +2307,12 @@ fn cmd_init(
         let root_full = dir.join(&root_name);
         let text = std::fs::read_to_string(&root_full)?;
         let doc = Document::parse(Path::new(&root_name), &text)?;
-        let updated = edit::set_in_text(&text, doc.carrier, "config", edit::infer_scalar(&config_name))?;
+        let updated = edit::set_in_text(
+            &text,
+            doc.carrier,
+            "config",
+            edit::infer_scalar(&config_name),
+        )?;
         std::fs::write(&root_full, updated)?;
     }
 
@@ -2035,7 +2333,11 @@ fn cmd_init(
             config: ws_config.clone(),
         };
         let link_registers = ctx.config.reference_style().registers()
-            || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+            || ctx
+                .config
+                .resolved_relation_styles()
+                .values()
+                .any(|s| s.registers());
         let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
             || ctx.config.identity.fires_on(Trigger::Create);
         if mints {
@@ -2100,7 +2402,14 @@ fn cmd_init(
     if use_walk {
         let mut plan = StructurePlan::default();
         let mut attachments: Vec<(PathBuf, PathBuf)> = Vec::new();
-        intake_walk(&dir, Path::new(""), Path::new(&root_name), content.ext(), &mut plan, &mut attachments)?;
+        intake_walk(
+            &dir,
+            Path::new(""),
+            Path::new(&root_name),
+            content.ext(),
+            &mut plan,
+            &mut attachments,
+        )?;
         if !plan.is_empty() || !attachments.is_empty() {
             let mut ctx = Ctx {
                 root_dir: dir.clone(),
@@ -2109,7 +2418,11 @@ fn cmd_init(
                 config: ws_config.clone(),
             };
             let link_registers = ctx.config.reference_style().registers()
-                || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+                || ctx
+                    .config
+                    .resolved_relation_styles()
+                    .values()
+                    .any(|s| s.registers());
             let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
                 || ctx.config.identity.fires_on(Trigger::Create);
             if mints {
@@ -2136,7 +2449,10 @@ fn cmd_init(
         }
     }
 
-    let author_note = author.as_deref().map(|a| format!(", author {a}")).unwrap_or_default();
+    let author_note = author
+        .as_deref()
+        .map(|a| format!(", author {a}"))
+        .unwrap_or_default();
     let (embed_label, _) = embed_labels(embed);
     // The path format only appears when a by-path reference is authored — it is
     // inert otherwise.
@@ -2162,9 +2478,12 @@ fn cmd_init(
         wrapper.label(),
         reference.label(),
     );
-    let next = format!("next: colophon new <path> --parent {root_name}");
+    let next = format!("next: colophon new <title> --in-path {root_name}");
     if prompting {
-        cliclack::outro(format!("initialized {}\n{details}{adopt_note}\n{next}", dir.display()))?;
+        cliclack::outro(format!(
+            "initialized {}\n{details}{adopt_note}\n{next}",
+            dir.display()
+        ))?;
     } else {
         println!("initialized {}", dir.display());
         for line in details.lines() {
@@ -2184,8 +2503,16 @@ fn cmd_init(
 fn prompt_wrapper() -> std::io::Result<WrapperArg> {
     cliclack::select("Wrapper")
         .initial_value(WrapperArg::Markdown)
-        .item(WrapperArg::Markdown, "Markdown", "[Title](target) — the diaryx/CommonMark form")
-        .item(WrapperArg::Wikilink, "Wikilink", "[[target]] — the Obsidian form")
+        .item(
+            WrapperArg::Markdown,
+            "Markdown",
+            "[Title](target) — the diaryx/CommonMark form",
+        )
+        .item(
+            WrapperArg::Wikilink,
+            "Wikilink",
+            "[[target]] — the Obsidian form",
+        )
         .interact()
 }
 
@@ -2200,7 +2527,11 @@ fn prompt_reference(identity: IdentityArg, wrapper: WrapperArg) -> std::io::Resu
     let wikilink = wrapper == WrapperArg::Wikilink;
     let mut select = cliclack::select("References between documents")
         .initial_value(ReferenceArg::Path)
-        .item(ReferenceArg::Path, "By path", "readable; rewritten when a file moves");
+        .item(
+            ReferenceArg::Path,
+            "By path",
+            "readable; rewritten when a file moves",
+        );
     if registers {
         select = select.item(
             ReferenceArg::Id,
@@ -2236,7 +2567,11 @@ fn prompt_id_storage() -> std::io::Result<IdStorageArg> {
             "In each file (+ registry)",
             "each document carries its own `id`; portable, travels with the file",
         )
-        .item(IdStorageArg::Registry, "Registry only", "IDs live in one registry document")
+        .item(
+            IdStorageArg::Registry,
+            "Registry only",
+            "IDs live in one registry document",
+        )
         .interact()
 }
 
@@ -2248,14 +2583,34 @@ fn prompt_path_format(wrapper: WrapperArg) -> std::io::Result<LinkStyleArg> {
     let mut select = cliclack::select("Path format").initial_value(LinkStyleArg::MarkdownRoot);
     select = match wrapper {
         WrapperArg::Markdown => select
-            .item(LinkStyleArg::MarkdownRoot, "Workspace-absolute", "[Title](/path.md)")
-            .item(LinkStyleArg::MarkdownRelative, "Relative", "[Title](../path.md)")
+            .item(
+                LinkStyleArg::MarkdownRoot,
+                "Workspace-absolute",
+                "[Title](/path.md)",
+            )
+            .item(
+                LinkStyleArg::MarkdownRelative,
+                "Relative",
+                "[Title](../path.md)",
+            )
             .item(LinkStyleArg::PlainRelative, "Plain relative", "../path.md")
-            .item(LinkStyleArg::PlainCanonical, "Plain workspace path", "path.md"),
+            .item(
+                LinkStyleArg::PlainCanonical,
+                "Plain workspace path",
+                "path.md",
+            ),
         WrapperArg::Wikilink => select
-            .item(LinkStyleArg::MarkdownRoot, "Workspace-absolute", "[[/path.md]]")
+            .item(
+                LinkStyleArg::MarkdownRoot,
+                "Workspace-absolute",
+                "[[/path.md]]",
+            )
             .item(LinkStyleArg::PlainRelative, "Relative", "[[../path.md]]")
-            .item(LinkStyleArg::PlainCanonical, "Workspace path", "[[path.md]]"),
+            .item(
+                LinkStyleArg::PlainCanonical,
+                "Workspace path",
+                "[[path.md]]",
+            ),
     };
     select.interact()
 }
@@ -2346,9 +2701,9 @@ fn cmd_meta(file: &Path, format: Option<MetaFormat>) -> CmdResult {
         return Err("document has no embedded metadata".into());
     };
     // Default to the format the document already uses.
-    let format = format.map(Format::from).unwrap_or_else(|| {
-        doc.carrier.map(|c| c.format()).unwrap_or(Format::Yaml)
-    });
+    let format = format
+        .map(Format::from)
+        .unwrap_or_else(|| doc.carrier.map(|c| c.format()).unwrap_or(Format::Yaml));
     print!("{}", meta::serialize_mapping(mapping, format)?);
     Ok(ExitCode::SUCCESS)
 }
@@ -2504,12 +2859,21 @@ fn cmd_explore(file: Option<&Path>) -> CmdResult {
                 }
             }
         };
-        let title = doc.meta.get("title").and_then(Value::as_str).unwrap_or_default().to_string();
+        let title = doc
+            .meta
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
 
         // Build the menu: view/edit, every forward link (by relation), every
         // backlink, then navigation.
         let mut actions: Vec<(String, String, ExploreAction)> = Vec::new();
-        actions.push(("View this document".into(), "page the raw file".into(), ExploreAction::View));
+        actions.push((
+            "View this document".into(),
+            "page the raw file".into(),
+            ExploreAction::View,
+        ));
         actions.push(("Edit in $EDITOR".into(), String::new(), ExploreAction::Edit));
 
         // Documents already reachable from this screen by a forward link. A
@@ -2517,17 +2881,23 @@ fn cmd_explore(file: Option<&Path>) -> CmdResult {
         // already show — the child's `part_of` mirroring our `contents`, most
         // often — and navigates to the same place, so it is suppressed below to
         // keep a folder-note's menu from listing every child twice.
-        let mut forward_targets: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut forward_targets: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
 
         for relation in ws.relations().relations() {
-            let Some(value) = doc.meta.get(&relation.name) else { continue };
+            let Some(value) = doc.meta.get(&relation.name) else {
+                continue;
+            };
             for raw in value.link_strings() {
                 let parsed = link::Link::parse(&raw);
                 let (label, action) = match ws.resolve_link_with(&current, &parsed, Some(&titles)) {
                     Target::Path(p) => {
                         let t = doc_title(&ctx, &p);
                         forward_targets.insert(p.clone());
-                        (format!("{}: {t}  ({})", relation.name, p.display()), ExploreAction::Goto(p))
+                        (
+                            format!("{}: {t}  ({})", relation.name, p.display()),
+                            ExploreAction::Goto(p),
+                        )
                     }
                     Target::External => (
                         format!("{}: {} (external)", relation.name, parsed.target),
@@ -2565,7 +2935,11 @@ fn cmd_explore(file: Option<&Path>) -> CmdResult {
         }
 
         if !history.is_empty() {
-            actions.push(("Back".into(), "the previous document".into(), ExploreAction::Back));
+            actions.push((
+                "Back".into(),
+                "the previous document".into(),
+                ExploreAction::Back,
+            ));
         }
         actions.push(("Quit".into(), String::new(), ExploreAction::Quit));
 
@@ -2605,7 +2979,12 @@ fn cmd_explore(file: Option<&Path>) -> CmdResult {
 fn doc_title(ctx: &Ctx, rel: &Path) -> String {
     load(&ctx.root_dir.join(rel))
         .ok()
-        .and_then(|(_, d)| d.meta.get("title").and_then(Value::as_str).map(str::to_owned))
+        .and_then(|(_, d)| {
+            d.meta
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| link::path_to_title(rel))
 }
 
@@ -2642,7 +3021,10 @@ fn edit_file(path: &Path) -> std::io::Result<()> {
         .unwrap_or_else(|_| "vi".to_string());
     let mut parts = editor.split_whitespace();
     let program = parts.next().unwrap_or("vi");
-    std::process::Command::new(program).args(parts).arg(path).status()?;
+    std::process::Command::new(program)
+        .args(parts)
+        .arg(path)
+        .status()?;
     Ok(())
 }
 
@@ -2778,24 +3160,41 @@ fn prompt(message: &str) -> Result<String, AnyError> {
 fn resolve_placement(
     ctx: &Ctx,
     ws: &mut Workspace<StdFs, Minter, FileIndex>,
-    in_doc: Option<&Path>,
-    under: Option<&str>,
+    target: &str,
     parents: bool,
     layout: Layout,
     dry_run: bool,
 ) -> Result<Option<PathBuf>, AnyError> {
-    let Some(route) = under else {
-        let path = in_doc.expect("clap requires --in or --under");
-        return Ok(Some(ws_rel(ctx, path)?));
+    let route = match parse_target(target) {
+        // A path or an id names something that must already exist; only a route
+        // has segments to synthesize, so only a route consults `-p`.
+        TargetSpec::Path(_) | TargetSpec::Id(_) => {
+            if parents {
+                return Err(format!(
+                    "-p creates missing *route* segments, but --in {target} is not a route\n\
+                     routes start with @ (e.g. --in @Daily/2026/08)"
+                )
+                .into());
+            }
+            let resolved = resolve_target(target)?;
+            return Ok(Some(ws_rel(ctx, &resolved)?));
+        }
+        TargetSpec::Route(route) => route,
     };
     let segments = Workspace::<StdFs>::route_segments(route);
     let plan = block_on(ws.plan_route(&ctx.root_doc, &segments, layout))?;
     if dry_run {
         show_route_plan(route, &plan);
         if plan.is_complete() {
-            println!("\nnothing to create; the route resolves to {}", plan.terminal.display());
+            println!(
+                "\nnothing to create; the route resolves to {}",
+                plan.terminal.display()
+            );
         } else if !parents {
-            println!("\n{} segment(s) missing — re-run with -p to create them", plan.synthesize.len());
+            println!(
+                "\n{} segment(s) missing — re-run with -p to create them",
+                plan.synthesize.len()
+            );
         }
         return Ok(None);
     }
@@ -2804,7 +3203,7 @@ fn resolve_placement(
         // half of the error is *how far* the route resolved.
         let missing = &plan.synthesize[0];
         return Err(format!(
-            "route {route:?} stops at {}: no child titled {:?}\n\
+            "@{route} stops at {}: no child titled {:?}\n\
              re-run with -p to create the missing segment(s), or --dry-run to preview",
             missing.parent.display(),
             missing.title,
@@ -2825,7 +3224,12 @@ fn resolve_placement(
 fn show_route_plan(route: &str, plan: &RoutePlan) {
     println!("route {route:?}");
     for (depth, node) in plan.resolved.iter().enumerate() {
-        println!("  {:indent$}{} (exists)", "", node.display(), indent = depth * 2);
+        println!(
+            "  {:indent$}{} (exists)",
+            "",
+            node.display(),
+            indent = depth * 2
+        );
     }
     let base = plan.resolved.len();
     for (depth, synth) in plan.synthesize.iter().enumerate() {
@@ -2840,14 +3244,13 @@ fn show_route_plan(route: &str, plan: &RoutePlan) {
 }
 
 /// Create a document under a parent named either by path (`--in`) or by its
-/// route through the containment tree (`--under`, optionally with `-p` to create
+/// route through the containment tree (`--in-title`, optionally with `-p` to create
 /// the segments that don't exist). Clap's `placement` group guarantees exactly
 /// one of the two.
 #[allow(clippy::too_many_arguments)]
 fn cmd_new(
     title: &str,
-    in_doc: Option<&Path>,
-    under: Option<&str>,
+    in_target: &str,
     parents: bool,
     layout: Layout,
     dry_run: bool,
@@ -2862,20 +3265,23 @@ fn cmd_new(
     // on the same terms — the registry has to exist before the route is applied,
     // not just before the leaf.
     let link_registers = ctx.config.reference_style().registers()
-        || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+        || ctx
+            .config
+            .resolved_relation_styles()
+            .values()
+            .any(|s| s.registers());
     let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
         || ctx.config.identity.fires_on(Trigger::Create);
     if mints && !dry_run {
         ensure_registry(&mut ctx)?;
     }
 
-    // Resolve the parent. `--in` is already a path; `--under` walks the tree from
+    // Resolve the parent. `--in-path` is already a path; `--in-title` walks the tree from
     // the root, and (with `-p`) creates what it doesn't find. Either way the rest
     // of this function is unchanged — a route is just another way to *name* a
     // parent, never a different kind of creation.
     let mut ws = workspace(&ctx)?;
-    let Some(parent_rel) =
-        resolve_placement(&ctx, &mut ws, in_doc, under, parents, layout, dry_run)?
+    let Some(parent_rel) = resolve_placement(&ctx, &mut ws, in_target, parents, layout, dry_run)?
     else {
         return Ok(ExitCode::SUCCESS);
     };
@@ -2887,7 +3293,8 @@ fn cmd_new(
     let path = match as_path {
         Some(p) => ws_rel(&ctx, p)?,
         None => {
-            let extension = ext.map(str::to_owned)
+            let extension = ext
+                .map(str::to_owned)
                 .unwrap_or_else(|| ctx.config.content_format.extension().to_string());
             let name = format!("{}.{extension}", link::slug(title));
             parent_rel.parent().unwrap_or(Path::new("")).join(name)
@@ -2901,10 +3308,18 @@ fn cmd_new(
     // prose body file. Name both so it is clear two files were written.
     match &created.body {
         Some(body) => {
-            println!("created {} (in {})", created.node.display(), parent_rel.display());
+            println!(
+                "created {} (in {})",
+                created.node.display(),
+                parent_rel.display()
+            );
             println!("  body: {}", body.display());
         }
-        None => println!("created {} (in {})", created.node.display(), parent_rel.display()),
+        None => println!(
+            "created {} (in {})",
+            created.node.display(),
+            parent_rel.display()
+        ),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -2913,30 +3328,41 @@ fn cmd_new(
 /// workspace — minting a metadata sidecar and linking it under a parent
 /// (default: the workspace root). Mirrors [`cmd_new`] — an id-registering
 /// reference style or an eager policy mints IDs, so a registry is ensured first.
+#[allow(clippy::too_many_arguments)]
 fn cmd_attach(
     payload: Option<&Path>,
-    parent: Option<&Path>,
+    in_target: Option<&str>,
+    parents: bool,
+    layout: Layout,
     all: bool,
     recursive: bool,
 ) -> CmdResult {
     let mut ctx = find_root()?;
     let link_registers = ctx.config.reference_style().registers()
-        || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+        || ctx
+            .config
+            .resolved_relation_styles()
+            .values()
+            .any(|s| s.registers());
     let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
         || ctx.config.identity.fires_on(Trigger::Create);
     if mints {
         ensure_registry(&mut ctx)?;
     }
-    // Default the parent to the workspace root — the common "attach this to my
-    // workspace" case needs no `--parent`.
-    let parent_rel = match parent {
-        Some(p) => ws_rel(&ctx, p)?,
-        None => ctx.root_doc.clone(),
-    };
     if recursive && !all {
         return Err("--recursive only applies with --all".into());
     }
     let mut ws = workspace(&ctx)?;
+    // Default the parent to the workspace root — the common "attach this to my
+    // workspace" case names no parent at all. Otherwise it is resolved exactly as
+    // every other command resolves one, so `--in-title` works here too.
+    let parent_rel = match in_target {
+        None => ctx.root_doc.clone(),
+        Some(t) => match resolve_placement(&ctx, &mut ws, t, parents, layout, false)? {
+            Some(p) => p,
+            None => return Ok(ExitCode::SUCCESS),
+        },
+    };
 
     if all {
         if payload.is_some() {
@@ -2983,20 +3409,24 @@ fn cmd_attach(
 }
 
 fn cmd_mv(
-    from: &Path,
+    from: &str,
     to: &Path,
-    in_doc: Option<&Path>,
-    under: Option<&str>,
+    in_target: Option<&str>,
     parents: bool,
     layout: Layout,
 ) -> CmdResult {
+    let from_resolved = resolve_target(from)?;
     let mut ctx = find_root()?;
     // `rename` mints nothing, but `--under -p` synthesizes nodes with `create`,
     // which does — so a registry has to exist before the route runs, exactly as in
     // `new`/`reparent`. Plain `mv` skips this and stays as cheap as it was.
-    if in_doc.is_some() || under.is_some() {
+    if in_target.is_some() {
         let link_registers = ctx.config.reference_style().registers()
-            || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+            || ctx
+                .config
+                .resolved_relation_styles()
+                .values()
+                .any(|s| s.registers());
         let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
             || ctx.config.identity.fires_on(Trigger::Create);
         if mints {
@@ -3005,16 +3435,15 @@ fn cmd_mv(
     }
     let mut ws = workspace(&ctx)?;
     let to_rel = ws_rel(&ctx, to)?;
-    block_on(ws.rename(&ws_rel(&ctx, from)?, &to_rel))?;
-    println!("moved {} -> {}", from.display(), to.display());
+    block_on(ws.rename(&ws_rel(&ctx, &from_resolved)?, &to_rel))?;
+    println!("moved {} -> {}", from_resolved.display(), to.display());
 
     // The move first, then the reparent — in that order because `rename` has
     // already retargeted every inbound link, so the parent the reparent removes is
     // found at the document's *new* path. Doing it the other way would reparent a
     // path that is about to stop existing.
-    if in_doc.is_some() || under.is_some() {
-        let Some(parent_rel) =
-            resolve_placement(&ctx, &mut ws, in_doc, under, parents, layout, false)?
+    if let Some(target) = in_target {
+        let Some(parent_rel) = resolve_placement(&ctx, &mut ws, target, parents, layout, false)?
         else {
             return Ok(ExitCode::SUCCESS);
         };
@@ -3026,9 +3455,8 @@ fn cmd_mv(
 }
 
 fn cmd_reparent(
-    path: &Path,
-    in_doc: Option<&Path>,
-    under: Option<&str>,
+    path: &str,
+    in_target: &str,
     parents: bool,
     layout: Layout,
     dry_run: bool,
@@ -3039,7 +3467,11 @@ fn cmd_reparent(
     // (The reparent itself authors links too, which an id-authoring workspace
     // registers.)
     let link_registers = ctx.config.reference_style().registers()
-        || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+        || ctx
+            .config
+            .resolved_relation_styles()
+            .values()
+            .any(|s| s.registers());
     let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
         || ctx.config.identity.fires_on(Trigger::Create);
     if mints && !dry_run {
@@ -3047,24 +3479,28 @@ fn cmd_reparent(
     }
 
     let mut ws = workspace(&ctx)?;
-    let Some(parent_rel) =
-        resolve_placement(&ctx, &mut ws, in_doc, under, parents, layout, dry_run)?
+    let Some(parent_rel) = resolve_placement(&ctx, &mut ws, in_target, parents, layout, dry_run)?
     else {
         return Ok(ExitCode::SUCCESS);
     };
-    let path_rel = ws_rel(&ctx, path)?;
+    let path_rel = ws_rel(&ctx, &resolve_target(path)?)?;
     block_on(ws.reparent(&path_rel, &parent_rel))?;
     persist(&ctx, &mut ws)?;
-    println!("reparented {} -> in {}", path_rel.display(), parent_rel.display());
+    println!(
+        "reparented {} -> in {}",
+        path_rel.display(),
+        parent_rel.display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_rm(path: &Path, force: bool) -> CmdResult {
+fn cmd_rm(path: &str, force: bool) -> CmdResult {
+    let resolved = resolve_target(path)?;
     let ctx = find_root()?;
     let mut ws = workspace(&ctx)?;
-    let danglers = block_on(ws.delete(&ws_rel(&ctx, path)?, force))?;
+    let danglers = block_on(ws.delete(&ws_rel(&ctx, &resolved)?, force))?;
     persist(&ctx, &mut ws)?;
-    println!("deleted {}", path.display());
+    println!("deleted {}", resolved.display());
     for finding in &danglers {
         eprintln!("warning: now dangling — {finding}");
     }
@@ -3084,7 +3520,10 @@ fn cmd_convert(file: &Path, axis: &str, value: &str, recursive: bool) -> CmdResu
             })?;
             let n = block_on(ws.convert_link_style(&ws_rel(&ctx, file)?, style, recursive))?;
             persist(&ctx, &mut ws)?;
-            println!("converted {n} document(s) to {} link style", style.as_config_str());
+            println!(
+                "converted {n} document(s) to {} link style",
+                style.as_config_str()
+            );
         }
         other => {
             return Err(format!(
@@ -3096,22 +3535,27 @@ fn cmd_convert(file: &Path, axis: &str, value: &str, recursive: bool) -> CmdResu
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_duplicate(source: &Path) -> CmdResult {
+fn cmd_duplicate(source: &str) -> CmdResult {
+    let resolved = resolve_target(source)?;
     let mut ctx = find_root()?;
     // Attaching the copy authors the parent's spanning entry, which mints an ID
     // when that style registers (or under an eager policy) — same as `new`, so
     // bootstrap a registry to persist it before building the workspace.
     let link_registers = ctx.config.reference_style().registers()
-        || ctx.config.resolved_relation_styles().values().any(|s| s.registers());
+        || ctx
+            .config
+            .resolved_relation_styles()
+            .values()
+            .any(|s| s.registers());
     let mints = (link_registers && ctx.config.identity.fires_on(Trigger::Link))
         || ctx.config.identity.fires_on(Trigger::Create);
     if mints {
         ensure_registry(&mut ctx)?;
     }
     let mut ws = workspace(&ctx)?;
-    let copy = block_on(ws.duplicate(&ws_rel(&ctx, source)?))?;
+    let copy = block_on(ws.duplicate(&ws_rel(&ctx, &resolved)?))?;
     persist(&ctx, &mut ws)?;
-    println!("duplicated {} -> {}", source.display(), copy.display());
+    println!("duplicated {} -> {}", resolved.display(), copy.display());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -3135,7 +3579,10 @@ fn cmd_config(key: Option<&str>, value: Option<&str>) -> CmdResult {
     match (key, value) {
         // No key: print the effective config (defaults + root + config document).
         (None, _) => {
-            print!("{}", meta::serialize_mapping(&ctx.config.to_mapping(), Format::Yaml)?);
+            print!(
+                "{}",
+                meta::serialize_mapping(&ctx.config.to_mapping(), Format::Yaml)?
+            );
         }
         // Key only: read that value from the linked config document.
         (Some(key), None) => {
@@ -3186,10 +3633,19 @@ fn ensure_config(ctx: &mut Ctx) -> Result<PathBuf, AnyError> {
         let root_title = std::fs::read_to_string(&root_full)
             .ok()
             .and_then(|t| Document::parse(&ctx.root_doc, &t).ok())
-            .and_then(|d| d.meta.get("title").and_then(Value::as_str).map(str::to_owned))
+            .and_then(|d| {
+                d.meta
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| colophon::path_to_title(&ctx.root_doc));
-        let part_of =
-            colophon::format_link(ctx.config.link_format, &config_rel, &ctx.root_doc, &root_title);
+        let part_of = colophon::format_link(
+            ctx.config.link_format,
+            &config_rel,
+            &ctx.root_doc,
+            &root_title,
+        );
         let mut seed = colophon::Mapping::new();
         seed.insert("title".into(), Value::String("colophon config".into()));
         seed.insert("part_of".into(), Value::String(part_of));
@@ -3199,9 +3655,18 @@ fn ensure_config(ctx: &mut Ctx) -> Result<PathBuf, AnyError> {
     let root_full = ctx.root_dir.join(&ctx.root_doc);
     let text = std::fs::read_to_string(&root_full)?;
     let doc = Document::parse(&ctx.root_doc, &text)?;
-    let updated = edit::set_in_text(&text, doc.carrier, "config", edit::infer_scalar(&config_name))?;
+    let updated = edit::set_in_text(
+        &text,
+        doc.carrier,
+        "config",
+        edit::infer_scalar(&config_name),
+    )?;
     std::fs::write(&root_full, updated)?;
-    eprintln!("initialized {} (linked from {})", config_rel.display(), ctx.root_doc.display());
+    eprintln!(
+        "initialized {} (linked from {})",
+        config_rel.display(),
+        ctx.root_doc.display()
+    );
     Ok(config_rel)
 }
 

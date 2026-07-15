@@ -60,7 +60,7 @@ pub enum Layout {
     /// Each synthesized node is a file beside its parent — `daily.md`,
     /// `2026.md`, `2026-07.md` all in the start document's directory.
     ///
-    /// Cheap for a shallow route (`--under Inbox`), but two routes that share a
+    /// Cheap for a shallow route (`--in-title Inbox`), but two routes that share a
     /// segment name (`Daily/2026` and `Projects/2026`) collide on one filename,
     /// and a deep route piles every generation into one directory.
     Flat,
