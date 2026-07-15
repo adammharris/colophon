@@ -37,6 +37,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::content::ContentFormat;
 use crate::document::MetaCarrier;
 use crate::error::{Error, Result};
 use crate::fs::Storage;
@@ -264,6 +265,12 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                         self.assert_combined(&current).await?;
                     }
                     let path = synth_path(&current, segment, layout, &ext);
+                    // Every synthesized node is vetted, not just the first: after
+                    // a miss the route keeps deriving paths from directories that
+                    // may well exist (a `Daily/2026/` full of months is exactly
+                    // the case), so a later segment can land on occupied ground
+                    // just as easily as the first.
+                    self.assert_vacant(&path, segment, layout).await?;
                     synthesize.push(SynthNode {
                         path: path.clone(),
                         parent: current.clone(),
@@ -279,6 +286,113 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
             synthesize,
             terminal: current,
         })
+    }
+
+    /// Whether `meta` declares the spanning relation in *either* direction — the
+    /// structural test for "this document is already a node in some containment
+    /// tree".
+    ///
+    /// Deliberately not a filename test. A document is a node because it declares
+    /// containment, never because of what it is called (DESIGN §2): this finds a
+    /// `daily_index.md` or a `2026_may.md` that no `index`/`readme` stem check
+    /// would, and correctly declines a bare `index.md` that declares nothing —
+    /// which is not a node, only a suggestively named file.
+    fn declares_containment(&self, meta: &Value) -> bool {
+        let rels = self.relations();
+        let Some(spanning) = rels.spanning_relation() else {
+            return false;
+        };
+        if meta.get(spanning).is_some() {
+            return true;
+        }
+        rels.relations()
+            .iter()
+            .find(|r| r.name == spanning)
+            .and_then(|r| r.inverse.as_deref())
+            .is_some_and(|inverse| meta.get(inverse).is_some())
+    }
+
+    /// Refuse to synthesize a node on top of one that already exists.
+    ///
+    /// Two ways a route can land on occupied ground, both silent before this:
+    ///
+    /// 1. A document already sits at the synthesized path. `create` would fail
+    ///    anyway, but only *after* the nodes above it were written — refusing
+    ///    while planning keeps a `--dry-run` honest and a partial route unwritten.
+    /// 2. **Nested only:** the directory the node would be created *in* already
+    ///    holds a node. This is the case that matters. A route segment is slugged
+    ///    to get a directory name, so `--under "Daily/…"` aims at `daily/`, which
+    ///    on a case-insensitive filesystem *is* an existing `Daily/` — and a
+    ///    `Daily/` holding a perfectly good `daily_index.md` titled "Daily Index"
+    ///    would silently gain a second, competing index whose only distinction is
+    ///    that its title matched what the user typed. The workspace ends up with
+    ///    two indexes for one directory and a root linking to the wrong one.
+    ///
+    /// The refusal is not "one index per directory" — containment is link-shaped
+    /// (DESIGN §3) and a directory may legitimately hold many nodes. It is
+    /// narrower: *this* node is being placed by slugging a title, so an existing
+    /// node in the target directory means the segment almost certainly meant that
+    /// node, under a title the route did not spell. Refusing and naming the title
+    /// found is the whole repair.
+    ///
+    /// Flat layout skips the directory check: it creates no directory, so its
+    /// neighbours are the parent's own siblings and finding nodes there is
+    /// expected, not evidence of anything.
+    async fn assert_vacant(&self, path: &Path, segment: &str, layout: Layout) -> Result<()> {
+        if self.fs().try_exists(&self.root().join(path)).await? {
+            return Err(Error::Structure(format!(
+                "route segment {segment:?} would create {}, but a file is already there; \
+                 `adopt` it if it belongs in the tree, or route to its title instead",
+                path.display()
+            )));
+        }
+        if layout != Layout::Nested {
+            return Ok(());
+        }
+        let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) else {
+            return Ok(());
+        };
+        let abs = self.root().join(dir);
+        if !self.fs().try_exists(&abs).await? {
+            return Ok(());
+        }
+        let Ok(entries) = self.fs().read_dir(&abs).await else {
+            return Ok(());
+        };
+        for entry in entries {
+            let Some(name) = entry.file_name() else {
+                continue;
+            };
+            let rel = link::normalize(dir.join(name));
+            if ContentFormat::from_extension(&rel).is_none() {
+                continue;
+            }
+            // An unreadable neighbour is `check`'s problem, not the route's —
+            // the same resilience `child_titled` applies to a broken sibling.
+            let Ok((_, doc)) = self.load(&rel).await else {
+                continue;
+            };
+            if !self.declares_containment(&doc.meta) {
+                continue;
+            }
+            let titled = doc
+                .meta
+                .get("title")
+                .and_then(title_text)
+                .map(|t| format!(" (titled {t:?})"))
+                .unwrap_or_default();
+            // The *segment* the caller typed, never the slug derived from it: the
+            // slug is an implementation detail of file placement, and echoing it
+            // back ("instead of \"daily\"") misnames what the user actually wrote.
+            return Err(Error::Structure(format!(
+                "route segment {segment:?} would create {}, but {}{} is already a node there; \
+                 route to its title instead, or `adopt` it if it is not linked yet",
+                path.display(),
+                rel.display(),
+                titled,
+            )));
+        }
+        Ok(())
     }
 
     /// Refuse a parent whose grammar makes folder-note synthesis lie — a
@@ -709,5 +823,136 @@ mod tests {
         let err = block_on(ws(&dir).plan_route(Path::new("nope.md"), &["Daily"], Layout::Nested))
             .unwrap_err();
         assert!(err.to_string().contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    fn a_directory_already_holding_a_node_refuses_instead_of_minting_a_competitor() {
+        // The bug the guard exists for, in the shape that produced it: `Daily/`
+        // already holds its index, titled "Daily Index". The route segment
+        // `Daily` slugs to `daily/` — the same directory on a case-insensitive
+        // filesystem — so without the guard this mints `daily/index.md` beside
+        // the real index and links the root to the competitor.
+        let dir = tempdir("occupied");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- '[Daily Index](/daily/daily_index.md)'\n---\n",
+        );
+        write(
+            &dir,
+            "daily/daily_index.md",
+            "---\ntitle: Daily Index\npart_of: '[Home](/index.md)'\ncontents:\n---\n",
+        );
+
+        let err = block_on(ws(&dir).plan_route(Path::new("index.md"), &["Daily"], Layout::Nested))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("daily/daily_index.md"),
+            "names what is in the way: {msg}"
+        );
+        assert!(
+            msg.contains("Daily Index"),
+            "names the title to route to instead: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_directory_of_plain_documents_does_not_block_a_route_node() {
+        // The guard is structural, not positional. `notes/` holds an ordinary
+        // document declaring no containment, so it is not "already a node" and
+        // the route may still put its index there. Note the inverse of the test
+        // above: a *filename* check would have been fooled here by the absence of
+        // anything called `index`, and fooled there by its presence.
+        let dir = tempdir("vacant");
+        write(&dir, "index.md", "---\ntitle: Home\n---\n");
+        write(&dir, "notes/loose.md", "---\ntitle: Loose\n---\n");
+
+        let plan = block_on(ws(&dir).plan_route(Path::new("index.md"), &["Notes"], Layout::Nested))
+            .unwrap();
+        assert_eq!(
+            plan.synthesize
+                .iter()
+                .map(|s| s.path.clone())
+                .collect::<Vec<_>>(),
+            vec![PathBuf::from("notes/index.md")]
+        );
+    }
+
+    #[test]
+    fn a_file_squatting_the_synthesized_path_is_refused_while_planning() {
+        // `create` would fail on this anyway — but only after writing every node
+        // above it. Refusing during the plan keeps `--dry-run` honest and leaves
+        // a refused route with nothing written at all.
+        let dir = tempdir("squat");
+        write(&dir, "index.md", "---\ntitle: Home\n---\n");
+        write(&dir, "daily/index.md", "---\ntitle: Unrelated\n---\n");
+
+        let err = block_on(ws(&dir).plan_route(Path::new("index.md"), &["Daily"], Layout::Nested))
+            .unwrap_err();
+        assert!(err.to_string().contains("a file is already there"), "{err}");
+    }
+
+    #[test]
+    fn flat_layout_is_not_blocked_by_the_nodes_beside_it() {
+        // Flat creates no directory, so a synthesized node's neighbours are the
+        // parent's own siblings — which are nodes by definition. Applying the
+        // directory check here would refuse every flat route.
+        let dir = tempdir("flat-vacant");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- '[Other](/other.md)'\n---\n",
+        );
+        write(
+            &dir,
+            "other.md",
+            "---\ntitle: Other\npart_of: '[Home](/index.md)'\n---\n",
+        );
+
+        let plan =
+            block_on(ws(&dir).plan_route(Path::new("index.md"), &["Daily"], Layout::Flat)).unwrap();
+        assert_eq!(plan.synthesize[0].path, PathBuf::from("daily.md"));
+    }
+
+    #[test]
+    fn a_later_segment_landing_on_an_occupied_directory_is_refused_too() {
+        // The vet runs on every synthesized node, not just the first: `Daily`
+        // resolves, then `2026` misses and aims at `daily/2026/` — a directory
+        // that already holds a year index under a title the route did not spell.
+        // This is the month-rollover shape, where the directories below a
+        // resolved node are exactly the ones most likely to already exist.
+        let dir = tempdir("deep-occupied");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- '[Daily](/daily/index.md)'\n---\n",
+        );
+        write(
+            &dir,
+            "daily/index.md",
+            "---\ntitle: Daily\npart_of: '[Home](/index.md)'\ncontents:\n---\n",
+        );
+        write(
+            &dir,
+            "daily/2026/2026_index.md",
+            "---\ntitle: '2026 Index'\ncontents:\n---\n",
+        );
+
+        let err = block_on(ws(&dir).plan_route(
+            Path::new("index.md"),
+            &["Daily", "2026"],
+            Layout::Nested,
+        ))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("daily/2026/2026_index.md"),
+            "names what is in the way: {msg}"
+        );
+        assert!(
+            msg.contains("2026 Index"),
+            "names the title to route to instead: {msg}"
+        );
     }
 }

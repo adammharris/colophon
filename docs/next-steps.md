@@ -238,7 +238,63 @@ maintained); a two-line alias supplies the dates.
   onto a route whose file already exists on disk but isn't linked fails with
   `already exists` (from `create`). Correct — link-shaped containment means an
   unlinked file isn't in the tree — but the fix is `adopt`, and the error doesn't
-  say so. Worth naming the remedy in the message.
+  say so. Worth naming the remedy in the message. *(Partly addressed: `assert_vacant`
+  now names `adopt` and refuses during the plan rather than mid-write.)*
+- **`assert_vacant` refuses; it deliberately does not reuse.** A route segment that
+  lands on a directory already holding a node stops with that node's title. The
+  tempting next step — resolve the segment *to* that node — is the one thing this
+  must not do: the segment only "matched" because its slug equalled a directory
+  name, which would make file layout load-bearing for graph addressing (§3) and
+  leave routes meaning something other than what they spell. The cost is typing the
+  real title once, and the error prints it.
+- **The refusal is not "one index per directory."** That's diaryx's rule, and
+  re-importing it as a lint would be directory-thinking: containment is link-shaped,
+  so a directory may hold as many nodes as it likes and colophon has no opinion.
+  `assert_vacant` fires only where synthesis is *forced to pick a filename by
+  slugging a title*, which is the one place the directory genuinely constrains the
+  graph. Nowhere else should grow a version of this check.
+
+## Index naming is hardcoded in three places
+
+Not configurable anywhere — no `WorkspaceConfig` field, three independent literals:
+`intake::existing_node` (`"index"`/`"readme"`), the CLI's `pick_root_candidate`
+(same pair), and `route::synth_path` (`format!("index.{ext}")`). Two different sins
+hide here and should be separated before either is fixed:
+
+- **Detecting *someone else's* index by filename is the bug.** `existing_node` asks
+  "which file is this directory's node?" and answers by name. Its own test proves
+  what that's worth: the fixture's `notes/index.md` is `---\ntitle: Notes Home\n---`
+  — no `contents`, no `part_of`, structurally identical to the `notes/leaf.md`
+  beside it. It wins on its name alone. But no structure means no index: the check
+  isn't detection at all, it's **collision-avoidance with mirror's own synthesis
+  target** wearing detection's clothes. The honest rewrite is a structural predicate
+  (`route::declares_containment` is one already) plus *adopt-the-file-at-the-synth-path*
+  — after which the name only matters because it's the name colophon itself chose.
+  Note this changes `readme` handling: a structureless `README.md` stops being a
+  folder node and becomes a child. That's correct, and it's exactly why the stems
+  belong in config as the *user's* declared convention rather than core's guess.
+- **Naming what colophon *creates* is legitimate but still shouldn't be a literal.**
+  `synth_path`'s `index.{ext}` is an authoring default like `default_embed_format`,
+  and belongs beside it in `WorkspaceConfig`.
+
+## Orphan detection can't see disconnected islands
+
+`validate::orphans` scans only "the directories the reachable set occupies (their
+direct children), never descending into unreached subdirectories." So a subtree that
+is internally well-linked but attached to *nothing* is invisible: in a real
+workspace, `School/Archive/MATH113/` holds `math113.md` plus ~20 children all
+correctly linked to each other, no `contents` entry anywhere points into the
+directory, and `check` reports **zero** findings there while flagging 180 orphans
+that happen to lie in already-reached directories.
+
+This is §8 turned on itself: discovery is reachability-bounded, but *"what is
+unreachable?"* is precisely the question a reachability bound cannot answer. The
+current check therefore finds only orphans **adjacent** to the tree, which is a
+much narrower claim than `Finding::Orphan`'s wording ("on disk but not linked into
+the workspace") implies — and the gap is silent, which is the worst property for a
+check to have. Any fix needs an unbounded scan, so it wants to be opt-in
+(`check --unreached`?) rather than a default, and the finding's message should say
+which of the two questions it answered. Deferred deliberately, not overlooked.
 
 ## Mutation
 
