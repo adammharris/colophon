@@ -7,6 +7,10 @@ contents = [[Design](docs/DESIGN.md), [Getting Started](docs/getting-started.md)
 
 # colophon
 
+[![crates.io](https://img.shields.io/crates/v/colophon.svg)](https://crates.io/crates/colophon)
+[![docs.rs](https://img.shields.io/docsrs/colophon)](https://docs.rs/colophon)
+[![license](https://img.shields.io/crates/l/colophon.svg)](#license)
+
 A *self-describing plaintext workspace*: a set of documents whose structure lives in the documents' own embedded metadata (frontmatter), not in the filesystem layout or an app-private sidecar folder.
 
 The name is the point. A *colophon* is the note in which a book describes its own making — the type, the paper, the press. A colophon workspace is one you can hand to any tool and it explains itself: follow the links in the metadata and the whole structure unfolds, with a distinguished root that describes the whole.
