@@ -209,6 +209,13 @@ pub enum Finding {
     /// workspace, or a file that fell out of the tree. Diagnosis only for now;
     /// adopting it under a parent is the eventual fix.
     Orphan { doc: PathBuf },
+    /// A document's stored content checksum no longer matches its bytes — the
+    /// bit-rot signal (fixity). `recorded` is the hash on file; `actual` is what
+    /// the bytes hash to now. Unlike a broken link there is nothing to re-point:
+    /// the finding asks whether the change was *intended* (an out-of-band edit →
+    /// re-stamp) or *corruption* (→ restore from backup), a judgment colophon
+    /// surfaces rather than makes.
+    FixityMismatch { doc: PathBuf, recorded: String, actual: String },
 }
 
 impl fmt::Display for Finding {
@@ -274,6 +281,12 @@ impl fmt::Display for Finding {
             Finding::Orphan { doc } => {
                 write!(f, "{}: orphan — on disk but not linked into the workspace", doc.display())
             }
+            Finding::FixityMismatch { doc, .. } => write!(
+                f,
+                "{}: fixity mismatch — content changed since its checksum was recorded \
+                 (bit-rot, or an out-of-band edit)",
+                doc.display()
+            ),
         }
     }
 }
@@ -299,6 +312,12 @@ pub enum Fix {
     /// `id` into the registry — registering `id` at this path so the cache
     /// catches up with the shadow.
     RegisterId { doc: PathBuf, id: Id },
+    /// Repair a [`Finding::FixityMismatch`] by *re-stamping*: record the current
+    /// bytes' hash, accepting the change as intended. The pressure-release valve
+    /// for a legitimate out-of-band edit — its opposite, restoring from backup
+    /// when the change was *not* intended, is the one thing colophon cannot decide
+    /// for you, which is why this is never applied without confirmation.
+    RestampFixity { doc: PathBuf, hash: String },
 }
 
 impl fmt::Display for Fix {
@@ -312,6 +331,9 @@ impl fmt::Display for Fix {
             }
             Fix::RegisterId { doc, id } => {
                 write!(f, "register id:{id} → {} in the registry", doc.display())
+            }
+            Fix::RestampFixity { doc, .. } => {
+                write!(f, "re-stamp the content checksum in {} to the current bytes", doc.display())
             }
         }
     }
@@ -365,6 +387,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             Finding::UnregisteredId { doc, frontmatter } => {
                 Ok(Some(Fix::RegisterId { doc: doc.clone(), id: frontmatter.clone() }))
             }
+            // Re-stamp to the current bytes — accept the change. The current hash
+            // is already computed in the finding, so no re-read is needed.
+            Finding::FixityMismatch { doc, actual, .. } => {
+                Ok(Some(Fix::RestampFixity { doc: doc.clone(), hash: actual.clone() }))
+            }
             _ => Ok(None),
         }
     }
@@ -382,6 +409,83 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             findings.extend(entry.finding());
         }
         findings.extend(self.orphans(start, &census, &content_bodies).await?);
+        findings.extend(self.fixity_findings(start, &census, &content_bodies).await?);
+        Ok(findings)
+    }
+
+    /// Verify every recorded content checksum reachable from `start` — one
+    /// [`Finding::FixityMismatch`] per document whose bytes no longer hash to what
+    /// it recorded. This is the bit-rot pass, the integrity question link
+    /// validation cannot answer: *are the bytes still the bytes?*
+    ///
+    /// It honors whatever hash is on record, independent of the workspace's
+    /// fixity *setting* — the setting governs what is written, never what is
+    /// checked, so a hash present on disk is always verified. A document with no
+    /// recorded hash is skipped (a document predating fixity is not "corrupt"),
+    /// and a digest colophon does not recognize (a future algorithm) is left
+    /// unverified rather than flagged. The reachable set is exactly the one
+    /// [`orphans`](Self::orphans) uses.
+    ///
+    /// The bytes a document's hash covers depend on its shape: a document that
+    /// points `content` at a sibling (an attachment payload, or a separated prose
+    /// body) hashes *that file*; a combined document hashes its own body.
+    async fn fixity_findings(
+        &self,
+        start: &Path,
+        census: &[CensusEntry],
+        content_bodies: &[PathBuf],
+    ) -> Result<Vec<Finding>> {
+        let mut reachable: BTreeSet<PathBuf> = BTreeSet::new();
+        reachable.insert(link::normalize(start));
+        reachable.extend(content_bodies.iter().cloned());
+        for entry in census {
+            match &entry.resolution {
+                Resolution::Path(p) | Resolution::Id { to: p, .. } => {
+                    reachable.insert(p.clone());
+                }
+                Resolution::CaseMismatch { got, actual } => {
+                    reachable.insert(got.with_file_name(actual));
+                }
+                _ => {}
+            }
+        }
+
+        let mut findings = Vec::new();
+        for path in reachable {
+            // A reached payload file (a `.png`) will not parse as a document —
+            // skip it; it is verified through its sidecar, not on its own.
+            let Ok((_, doc)) = self.load(&path).await else {
+                continue;
+            };
+            let Some(recorded) = doc.meta.get("content_hash").and_then(Value::as_str) else {
+                continue;
+            };
+            if !crate::fixity::is_recognized(recorded) {
+                continue;
+            }
+            // What the hash covers: the `content` sibling if this document points
+            // at one, else the document's own body.
+            let actual = match doc.content_attr() {
+                Some(raw) => {
+                    let dir = path.parent().unwrap_or(Path::new(""));
+                    let target = link::normalize(dir.join(raw));
+                    match self.fs().read(&self.root().join(&target)).await {
+                        Ok(bytes) => crate::fixity::digest(&bytes),
+                        // A missing payload is a broken-`content` matter, not a
+                        // fixity one — leave it for that check, don't double-report.
+                        Err(_) => continue,
+                    }
+                }
+                None => crate::fixity::digest(doc.body.as_bytes()),
+            };
+            if actual != recorded {
+                findings.push(Finding::FixityMismatch {
+                    doc: path,
+                    recorded: recorded.to_string(),
+                    actual,
+                });
+            }
+        }
         Ok(findings)
     }
 
@@ -786,6 +890,18 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             // edit — but the registry write it implies is staged by `commit`).
             Fix::RegisterId { doc, id } => {
                 self.index_mut().register(id, doc);
+            }
+            // Re-stamp: overwrite the document's `content_hash` with the current
+            // bytes' hash (comment-/format-preservingly, like `SetId`).
+            Fix::RestampFixity { doc, hash } => {
+                let (text, parsed) = self.load(doc).await?;
+                let updated = crate::edit::set_in_text(
+                    &text,
+                    parsed.carrier,
+                    "content_hash",
+                    fig::Value::Str(hash.clone()),
+                )?;
+                cs.write(doc, updated);
             }
         }
         self.commit(cs).await

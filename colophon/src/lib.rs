@@ -54,6 +54,7 @@ pub mod document;
 pub mod edit;
 pub mod error;
 pub mod exec;
+pub mod fixity;
 pub mod fs;
 pub mod identity;
 pub mod index;
@@ -70,7 +71,7 @@ pub mod validate;
 pub mod workspace;
 
 pub use change::{ChangeSet, FileOp};
-pub use config::{IdStorage, RelationStyleConfig, WorkspaceConfig};
+pub use config::{Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig};
 pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
 pub use document::{Document, EmbedStyle, EmbedType, embed_carrier, is_opaque_payload};

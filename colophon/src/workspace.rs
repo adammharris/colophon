@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use crate::change::ChangeSet;
+use crate::config::Fixity;
 use crate::content::ContentFormat;
 use crate::error::{Error, Result};
 use crate::fs::Storage;
@@ -48,6 +49,7 @@ pub struct Workspace<FS, Id = NoIdentity, Ix = NoIndex> {
     id_links: bool,
     reference_style: Option<ReferenceStyle>,
     default_embed_format: fig::Format,
+    fixity: Fixity,
 }
 
 impl<FS> Workspace<FS, NoIdentity, NoIndex> {
@@ -65,6 +67,7 @@ impl<FS> Workspace<FS, NoIdentity, NoIndex> {
             id_links: false,
             reference_style: None,
             default_embed_format: fig::Format::Yaml,
+            fixity: Fixity::Payloads,
         }
     }
 }
@@ -101,6 +104,14 @@ impl<FS, Id, Ix> Workspace<FS, Id, Ix> {
     /// effective default [`reference_style`](Self::reference_style).
     pub fn id_links(&self) -> bool {
         self.reference_style().registers()
+    }
+
+    /// How far this workspace records content checksums — attachments only (the
+    /// default), attachments plus document bodies, or off. Consulted by the ops
+    /// that *record* a hash (`attach`, `edit`); `check` honors any hash already
+    /// recorded regardless.
+    pub fn fixity(&self) -> Fixity {
+        self.fixity
     }
 
     /// The workspace-default reference style — the fallback for any relation
@@ -779,6 +790,7 @@ pub struct WorkspaceBuilder<FS, Id, Ix> {
     id_links: bool,
     reference_style: Option<ReferenceStyle>,
     default_embed_format: fig::Format,
+    fixity: Fixity,
 }
 
 impl<FS, Id, Ix> WorkspaceBuilder<FS, Id, Ix> {
@@ -809,6 +821,12 @@ impl<FS, Id, Ix> WorkspaceBuilder<FS, Id, Ix> {
         self
     }
 
+    /// Set how far content checksums are recorded (attachments only by default).
+    pub fn fixity(mut self, fixity: Fixity) -> Self {
+        self.fixity = fixity;
+        self
+    }
+
     /// Set the workspace-default reference style — the fallback for relations
     /// without their own override. Supersedes the `link_style`/`id_links`
     /// convenience inputs when set.
@@ -836,6 +854,7 @@ impl<FS, Id, Ix> WorkspaceBuilder<FS, Id, Ix> {
             id_links: self.id_links,
             reference_style: self.reference_style,
             default_embed_format: self.default_embed_format,
+            fixity: self.fixity,
         }
     }
 
@@ -851,6 +870,7 @@ impl<FS, Id, Ix> WorkspaceBuilder<FS, Id, Ix> {
             id_links: self.id_links,
             reference_style: self.reference_style,
             default_embed_format: self.default_embed_format,
+            fixity: self.fixity,
         }
     }
 
@@ -866,6 +886,7 @@ impl<FS, Id, Ix> WorkspaceBuilder<FS, Id, Ix> {
             id_links: self.id_links,
             reference_style: self.reference_style,
             default_embed_format: self.default_embed_format,
+            fixity: self.fixity,
         }
     }
 }

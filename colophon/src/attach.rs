@@ -249,6 +249,14 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         map.insert(inverse.clone(), Value::String(up));
         map.insert("content".into(), Value::String(payload_ref));
         map.insert("attachment".into(), Value::Bool(true));
+        // Fixity: record a checksum of the payload's bytes, so `check` can later
+        // detect bit-rot. Unambiguous for an attachment — its bytes are never
+        // edited — so it is recorded whenever the workspace covers payloads, with
+        // no per-file opt-in. The payload is read once here, at attach time.
+        if self.fixity().covers_payloads() {
+            let bytes = self.fs().read(&self.root().join(&payload)).await?;
+            map.insert("content_hash".into(), Value::String(crate::fixity::digest(&bytes)));
+        }
         let node_text = crate::meta::serialize_mapping(&map, format)?;
 
         // The parent: append the sidecar to its spanning field (creating it if
@@ -281,6 +289,7 @@ mod tests {
     use super::*;
     use crate::exec::block_on;
     use crate::fs::StdFs;
+    use crate::validate::Finding;
 
     fn write(dir: &Path, rel: &str, bytes: &[u8]) {
         let p = dir.join(rel);
@@ -331,6 +340,82 @@ mod tests {
         // treated as an orphan.
         assert_eq!(std::fs::read(dir.join("photo.jpg")).unwrap(), [0xff, 0xd8, 0xff, 0xe0, 0x00]);
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn attach_records_a_payload_checksum_that_check_verifies() {
+        // Fixity default (payloads): the sidecar carries a sha256 of the bytes,
+        // and a clean workspace verifies without a finding.
+        let dir = tempdir("fixity-record");
+        write(&dir, "index.md", b"---\ntitle: Home\n---\n");
+        let payload: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0x03];
+        write(&dir, "photo.jpg", payload);
+
+        block_on(ws(&dir).attach(Path::new("photo.jpg"), Path::new("index.md"))).unwrap();
+
+        let sidecar = read(&dir, "photo.jpg.yaml");
+        let expected = crate::fixity::digest(payload);
+        assert!(sidecar.contains(&format!("content_hash: {expected}")), "{sidecar}");
+        assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn check_catches_a_corrupted_payload() {
+        // The archival payoff: bit-rot no link check would ever see.
+        let dir = tempdir("fixity-rot");
+        write(&dir, "index.md", b"---\ntitle: Home\n---\n");
+        write(&dir, "photo.jpg", &[0xff, 0xd8, 0xff, 0xe0, 0x01]);
+        block_on(ws(&dir).attach(Path::new("photo.jpg"), Path::new("index.md"))).unwrap();
+
+        // A bit rots — the payload's bytes change out from under its checksum.
+        write(&dir, "photo.jpg", &[0xff, 0xd8, 0xff, 0xe0, 0x99]);
+
+        let findings = block_on(ws(&dir).check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(
+                f,
+                Finding::FixityMismatch { doc, .. } if doc == Path::new("photo.jpg.yaml")
+            )),
+            "expected a fixity mismatch, got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn restamping_accepts_a_changed_payload_and_clears_the_finding() {
+        // The pressure-release valve: an intended change is re-blessed by
+        // re-stamping, and the workspace validates again.
+        let dir = tempdir("fixity-restamp");
+        write(&dir, "index.md", b"---\ntitle: Home\n---\n");
+        write(&dir, "photo.jpg", &[0x01, 0x02, 0x03]);
+        block_on(ws(&dir).attach(Path::new("photo.jpg"), Path::new("index.md"))).unwrap();
+
+        write(&dir, "photo.jpg", &[0x04, 0x05, 0x06]); // an intended re-export
+
+        let mut w = ws(&dir);
+        let finding = block_on(w.check("index.md"))
+            .unwrap()
+            .into_iter()
+            .find(|f| matches!(f, Finding::FixityMismatch { .. }))
+            .expect("a mismatch to re-stamp");
+        let fix = block_on(w.suggest_fix(&finding)).unwrap().expect("a re-stamp fix");
+        block_on(w.apply_fix(&fix)).unwrap();
+
+        // Re-blessed: the recorded hash now matches the new bytes.
+        assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
+        assert!(read(&dir, "photo.jpg.yaml").contains(&crate::fixity::digest(&[0x04, 0x05, 0x06])));
+    }
+
+    #[test]
+    fn fixity_off_records_no_checksum() {
+        let dir = tempdir("fixity-off");
+        write(&dir, "index.md", b"---\ntitle: Home\n---\n");
+        write(&dir, "photo.jpg", &[0x01, 0x02, 0x03]);
+
+        let w = || Workspace::builder(StdFs).root(&dir).fixity(crate::config::Fixity::Off).build();
+        block_on(w().attach(Path::new("photo.jpg"), Path::new("index.md"))).unwrap();
+
+        assert!(!read(&dir, "photo.jpg.yaml").contains("content_hash"), "off records nothing");
+        assert_eq!(block_on(w().check("index.md")).unwrap(), vec![]);
     }
 
     #[test]

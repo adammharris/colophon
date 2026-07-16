@@ -98,6 +98,67 @@ impl IdStorage {
     }
 }
 
+/// How far content-checksum (fixity) coverage extends — the archival integrity
+/// axis. Orthogonal to the identity and link axes; this is purely about
+/// detecting bit-rot in stored bytes.
+///
+/// The tiers exist because fixity means different things for different content.
+/// An **attachment** is never edited, so a change to its bytes is unambiguously
+/// corruption — safe to checksum by default, with no friction. A **document
+/// body** *is* edited, and a legitimate external edit is indistinguishable from
+/// rot to a checker, so hashing bodies is opt-in and best paired with
+/// `colophon edit` (which restamps on save). Frontmatter is never hashed: it is
+/// small, structured, edited constantly by colophon's own link maintenance, and
+/// its corruption already surfaces as parse or link findings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Fixity {
+    /// No content checksums are recorded or verified.
+    Off,
+    /// **Attachments only** (the default): each attachment sidecar records a
+    /// `content_hash` of its payload, and `check` verifies it. Unambiguous — a
+    /// payload's bytes changing is always corruption — so there is no edit
+    /// friction and nothing to opt out of per document.
+    #[default]
+    Payloads,
+    /// **Attachments and document bodies**: additionally, each document records a
+    /// `content_hash` of its *body* (never its frontmatter). The archival-grade
+    /// tier; because a body is editable, pair it with `colophon edit` so a body
+    /// change restamps the hash, and treat an out-of-band edit as a `check`
+    /// finding to re-bless rather than a hard error.
+    Full,
+}
+
+impl Fixity {
+    /// Whether attachment payloads are checksummed (true for every tier but off).
+    pub fn covers_payloads(self) -> bool {
+        matches!(self, Fixity::Payloads | Fixity::Full)
+    }
+
+    /// Whether document bodies are checksummed (only the `full` tier).
+    pub fn covers_bodies(self) -> bool {
+        matches!(self, Fixity::Full)
+    }
+
+    /// Parse the `fixity` config spelling; unknown → `None`.
+    pub fn from_config_str(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "payloads" => Some(Self::Payloads),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    /// The `fixity` config spelling.
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Payloads => "payloads",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// The workspace-wide policy a config document declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceConfig {
@@ -149,6 +210,9 @@ pub struct WorkspaceConfig {
     /// use, where a deletion should never be silently unrecoverable — and opt-out
     /// per workspace for those who genuinely want a hard delete as the default.
     pub recycle_bin: bool,
+    /// How far content-checksum (fixity) coverage extends — attachments only (the
+    /// default), attachments plus document bodies, or off.
+    pub fixity: Fixity,
 }
 
 impl Default for WorkspaceConfig {
@@ -169,6 +233,7 @@ impl Default for WorkspaceConfig {
             embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
             recycle_bin: true,
+            fixity: Fixity::Payloads,
         }
     }
 }
@@ -190,6 +255,7 @@ impl WorkspaceConfig {
             embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
             recycle_bin: true,
+            fixity: Fixity::Payloads,
         }
     }
 
@@ -210,6 +276,7 @@ impl WorkspaceConfig {
             embed_style: EmbedStyle::Delimited,
             content_format: ContentFormat::Markdown,
             recycle_bin: true,
+            fixity: Fixity::Payloads,
         }
     }
 
@@ -331,6 +398,11 @@ impl WorkspaceConfig {
         if let Some(recycle) = meta.get("recycle_bin").and_then(Value::as_bool) {
             self.recycle_bin = recycle;
         }
+        if let Some(fixity) =
+            meta.get("fixity").and_then(Value::as_str).and_then(Fixity::from_config_str)
+        {
+            self.fixity = fixity;
+        }
     }
 
     /// A fresh config with `meta`'s recognized keys applied over the defaults.
@@ -379,6 +451,7 @@ impl WorkspaceConfig {
         map.insert("embed_type".into(), Value::String(self.embed_style.as_config_str().into()));
         map.insert("content_format".into(), Value::String(self.content_format.as_config_str().into()));
         map.insert("recycle_bin".into(), Value::Bool(self.recycle_bin));
+        map.insert("fixity".into(), Value::String(self.fixity.as_config_str().into()));
         map
     }
 }
@@ -478,6 +551,7 @@ mod tests {
             content_format: ContentFormat::Djot,
             // Non-default, so the round-trip actually exercises the axis.
             recycle_bin: false,
+            fixity: Fixity::Full,
         };
         let back = WorkspaceConfig::from_meta(&Value::Mapping(config.to_mapping()));
         assert_eq!(back, config);

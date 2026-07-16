@@ -1175,6 +1175,7 @@ fn workspace(ctx: &Ctx) -> Result<Workspace<StdFs, Minter, FileIndex>, AnyError>
         .id_links(ctx.config.id_links)
         .reference_style(ctx.config.reference_style())
         .default_embed_format(ctx.config.default_embed_format)
+        .fixity(ctx.config.fixity)
         .build())
 }
 
@@ -2261,6 +2262,7 @@ fn cmd_init(
         embed_style: embed,
         content_format: content.into(),
         recycle_bin: true,
+        fixity: colophon::Fixity::Payloads,
     };
     reference.write_onto(wrapper.into(), &mut ws_config);
 
