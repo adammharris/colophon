@@ -3,7 +3,7 @@ resolver = "2"
 members = ["colophon", "colophon-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 repository = "https://github.com/adammharris/colophon"
@@ -35,4 +35,4 @@ twig-doc = { version = "2.1.0" }
 moid = "0.1.0"
 
 # Internal crate.
-colophon = { path = "colophon", version = "0.1.0" }
+colophon = { path = "colophon", version = "0.2.0" }
