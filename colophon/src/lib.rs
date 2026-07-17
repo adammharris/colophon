@@ -71,7 +71,10 @@ pub mod validate;
 pub mod workspace;
 
 pub use change::{ChangeSet, FileOp};
-pub use config::{Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig};
+pub use config::{
+    ConfigIssue, ConfigIssueKind, Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig, diagnose,
+    spec_ahead,
+};
 pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
 pub use document::{Document, EmbedStyle, EmbedType, embed_carrier, is_opaque_payload};
@@ -84,8 +87,8 @@ pub use index::{FileIndex, InMemoryIndex, IndexStore, NoIndex};
 pub use intake::{Adoption, PlanOutcome, StructurePlan, SynthNode};
 pub use journal::{Recovered, recover};
 pub use link::{
-    Addressing, BodyLink, Link, LinkStyle, ReferenceStyle, Wikilink, Wrapper, format_link,
-    path_to_title,
+    Addressing, BodyLink, Link, LinkStyle, Notation, PathStyle, ReferenceStyle, Wikilink, Wrapper,
+    format_link, path_to_title,
 };
 pub use meta::{Mapping, Value};
 pub use mutate::Created;

@@ -216,6 +216,21 @@ pub enum Finding {
     /// re-stamp) or *corruption* (→ restore from backup), a judgment colophon
     /// surfaces rather than makes.
     FixityMismatch { doc: PathBuf, recorded: String, actual: String },
+    /// A key in the workspace's config document that [`WorkspaceConfig::apply`]
+    /// silently ignores — a misspelled key that resembles a real axis, or a
+    /// recognized axis with a value colophon does not understand. In both cases
+    /// `apply` keeps the default, so the policy the author wrote never takes
+    /// effect; this makes that visible instead of leaving it to be discovered by
+    /// surprise. Diagnosis only — the fix (correct the spelling/value) is the
+    /// author's, not a mechanical rewrite.
+    ///
+    /// [`WorkspaceConfig::apply`]: crate::config::WorkspaceConfig::apply
+    ConfigIssue { doc: PathBuf, issue: crate::config::ConfigIssue },
+    /// A config surface declares a `spec` (`declared`) newer than this build
+    /// understands ([`SPEC_VERSION`](crate::config::SPEC_VERSION)), so colophon
+    /// may be silently ignoring settings a newer colophon wrote. Diagnosis only —
+    /// the resolution is to upgrade colophon, not to edit the workspace.
+    ConfigSpecAhead { doc: PathBuf, declared: i64 },
 }
 
 impl fmt::Display for Finding {
@@ -286,6 +301,27 @@ impl fmt::Display for Finding {
                 "{}: fixity mismatch — content changed since its checksum was recorded \
                  (bit-rot, or an out-of-band edit)",
                 doc.display()
+            ),
+            Finding::ConfigIssue { doc, issue } => match &issue.kind {
+                crate::config::ConfigIssueKind::UnknownKey { suggestion } => write!(
+                    f,
+                    "{}: unknown config key `{}` — did you mean `{suggestion}`? (ignored, keeping the default)",
+                    doc.display(),
+                    issue.key
+                ),
+                crate::config::ConfigIssueKind::InvalidValue { value, expected } => write!(
+                    f,
+                    "{}: config `{}` has unrecognized value `{value}` (expected: {}) — keeping the default",
+                    doc.display(),
+                    issue.key,
+                    expected.join(", ")
+                ),
+            },
+            Finding::ConfigSpecAhead { doc, declared } => write!(
+                f,
+                "{}: config declares spec {declared}, newer than this build's spec {} — some settings may be ignored (upgrade colophon)",
+                doc.display(),
+                crate::config::SPEC_VERSION
             ),
         }
     }
@@ -410,6 +446,44 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         findings.extend(self.orphans(start, &census, &content_bodies).await?);
         findings.extend(self.fixity_findings(start, &census, &content_bodies).await?);
+        findings.extend(self.config_findings(start).await?);
+        Ok(findings)
+    }
+
+    /// Lint both config surfaces the workspace reads — the root's `colophon:`
+    /// frontmatter block and the dedicated config document — one
+    /// [`Finding::ConfigIssue`] per key [`WorkspaceConfig::apply`] would silently
+    /// ignore (a typo'd key, or a recognized axis with a value colophon doesn't
+    /// understand). Both are closed policy namespaces (the block is nested under
+    /// one key; the config document is wholly policy), so `diagnose` runs fully on
+    /// each without mistaking a user field for a setting. A no-op surface — no
+    /// `colophon:` block, no config document — contributes nothing.
+    ///
+    /// [`WorkspaceConfig::apply`]: crate::config::WorkspaceConfig::apply
+    async fn config_findings(&self, start: &Path) -> Result<Vec<Finding>> {
+        let mut findings = Vec::new();
+        // The root's inline `colophon:` block (the description home).
+        if let Ok((_, root)) = self.load(start).await
+            && let Some(block) = root.meta.get(crate::config::ROOT_CONFIG_KEY)
+        {
+            let doc = start.to_path_buf();
+            findings.extend(crate::config::diagnose(block).into_iter().map(|issue| {
+                Finding::ConfigIssue { doc: doc.clone(), issue }
+            }));
+            if let Some(declared) = crate::config::spec_ahead(block) {
+                findings.push(Finding::ConfigSpecAhead { doc, declared });
+            }
+        }
+        // The dedicated config document (the `config`-relation target).
+        if let Some(config_doc) = self.config_path(start).await? {
+            let (_, doc) = self.load(&config_doc).await?;
+            findings.extend(crate::config::diagnose(&doc.meta).into_iter().map(|issue| {
+                Finding::ConfigIssue { doc: config_doc.clone(), issue }
+            }));
+            if let Some(declared) = crate::config::spec_ahead(&doc.meta) {
+                findings.push(Finding::ConfigSpecAhead { doc: config_doc.clone(), declared });
+            }
+        }
         Ok(findings)
     }
 

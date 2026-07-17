@@ -149,6 +149,10 @@ pub enum LinkStyle {
     MarkdownRoot,
     /// `[Title](../path/file.md)` — relative Markdown link.
     MarkdownRelative,
+    /// `[Title](path/file.md)` — canonical (workspace-relative) Markdown link.
+    MarkdownCanonical,
+    /// `/path/file.md` — bare workspace-absolute path.
+    PlainRoot,
     /// `../path/file.md` — bare relative path.
     PlainRelative,
     /// `path/file.md` — bare workspace-relative (canonical) path.
@@ -156,27 +160,123 @@ pub enum LinkStyle {
 }
 
 impl LinkStyle {
-    /// Parse the `link_format` frontmatter value (diaryx's snake_case spelling).
-    /// Unknown or absent → `None`, so callers can fall back to the default.
+    /// This style's notation (bracketed Markdown vs bare path) and path
+    /// resolution — the two orthogonal axes the config `references.notation` /
+    /// `references.path_style` keys expose (see [`Notation`] / [`PathStyle`]).
+    /// `LinkStyle` is the fused internal carrier; these split it back out.
+    pub fn axes(self) -> (Notation, PathStyle) {
+        match self {
+            Self::MarkdownRoot => (Notation::Markdown, PathStyle::Root),
+            Self::MarkdownRelative => (Notation::Markdown, PathStyle::Relative),
+            Self::MarkdownCanonical => (Notation::Markdown, PathStyle::Canonical),
+            Self::PlainRoot => (Notation::Bare, PathStyle::Root),
+            Self::PlainRelative => (Notation::Bare, PathStyle::Relative),
+            Self::PlainCanonical => (Notation::Bare, PathStyle::Canonical),
+        }
+    }
+
+    /// The fused [`LinkStyle`] for a bracketed-vs-bare notation and a path
+    /// resolution. `Wikilink` has no bare/bracketed distinction, so it maps
+    /// through the Markdown family (only the path-text shape matters for it).
+    pub fn from_axes(notation: Notation, path_style: PathStyle) -> Self {
+        match (notation, path_style) {
+            (Notation::Markdown | Notation::Wikilink, PathStyle::Root) => Self::MarkdownRoot,
+            (Notation::Markdown | Notation::Wikilink, PathStyle::Relative) => Self::MarkdownRelative,
+            (Notation::Markdown | Notation::Wikilink, PathStyle::Canonical) => Self::MarkdownCanonical,
+            (Notation::Bare, PathStyle::Root) => Self::PlainRoot,
+            (Notation::Bare, PathStyle::Relative) => Self::PlainRelative,
+            (Notation::Bare, PathStyle::Canonical) => Self::PlainCanonical,
+        }
+    }
+}
+
+/// The syntactic form a reference is written in — the config-facing notation
+/// axis (`references.notation`), orthogonal to [`PathStyle`]. This is the clean
+/// split of what the internal [`Wrapper`] + `plain_`/`markdown_` [`LinkStyle`]
+/// prefix fused: `Bare` is a path with no brackets, `Markdown` is `[Title](…)`,
+/// `Wikilink` is `[[…]]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Notation {
+    /// `[Title](target)`.
+    #[default]
+    Markdown,
+    /// `[[target]]` / `[[target|Title]]`.
+    Wikilink,
+    /// A bare `target`, no brackets — what the old `plain_*` link formats wrote.
+    Bare,
+}
+
+impl Notation {
+    /// Parse the `references.notation` config spelling; unknown → `None`.
     pub fn from_config_str(value: &str) -> Option<Self> {
         match value {
-            "markdown_root" => Some(Self::MarkdownRoot),
-            "markdown_relative" => Some(Self::MarkdownRelative),
-            "plain_relative" => Some(Self::PlainRelative),
-            "plain_canonical" => Some(Self::PlainCanonical),
+            "markdown" => Some(Self::Markdown),
+            "wikilink" => Some(Self::Wikilink),
+            "bare" => Some(Self::Bare),
             _ => None,
         }
     }
 
-    /// The `link_format` config spelling (the inverse of [`from_config_str`]).
-    ///
-    /// [`from_config_str`]: LinkStyle::from_config_str
+    /// The `references.notation` config spelling.
     pub fn as_config_str(self) -> &'static str {
         match self {
-            Self::MarkdownRoot => "markdown_root",
-            Self::MarkdownRelative => "markdown_relative",
-            Self::PlainRelative => "plain_relative",
-            Self::PlainCanonical => "plain_canonical",
+            Self::Markdown => "markdown",
+            Self::Wikilink => "wikilink",
+            Self::Bare => "bare",
+        }
+    }
+
+    /// The internal [`Wrapper`] this notation renders through. `Markdown` and
+    /// `Bare` share the Markdown wrapper (the bracket-vs-bare choice lives in the
+    /// path style); `Wikilink` is its own wrapper.
+    pub fn wrapper(self) -> Wrapper {
+        match self {
+            Self::Wikilink => Wrapper::Wikilink,
+            Self::Markdown | Self::Bare => Wrapper::Markdown,
+        }
+    }
+
+    /// Recover the notation from a fused [`Wrapper`] + [`LinkStyle`] — the inverse
+    /// direction, for serializing an internal style back to config.
+    pub fn from_wrapper(wrapper: Wrapper, style: LinkStyle) -> Self {
+        match wrapper {
+            Wrapper::Wikilink => Self::Wikilink,
+            Wrapper::Markdown => style.axes().0,
+        }
+    }
+}
+
+/// The path-resolution a reference uses for a path target — the config-facing
+/// `references.path_style` axis, orthogonal to [`Notation`]. Applies to path
+/// targets only (id/alias ignore it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PathStyle {
+    /// Workspace-absolute: `/path/file.md`.
+    #[default]
+    Root,
+    /// Relative to the referring document: `../file.md`.
+    Relative,
+    /// Workspace-relative with no leading slash: `path/file.md`.
+    Canonical,
+}
+
+impl PathStyle {
+    /// Parse the `references.path_style` config spelling; unknown → `None`.
+    pub fn from_config_str(value: &str) -> Option<Self> {
+        match value {
+            "root" => Some(Self::Root),
+            "relative" => Some(Self::Relative),
+            "canonical" => Some(Self::Canonical),
+            _ => None,
+        }
+    }
+
+    /// The `references.path_style` config spelling.
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Relative => "relative",
+            Self::Canonical => "canonical",
         }
     }
 }
@@ -194,6 +294,8 @@ pub fn format_link(style: LinkStyle, from: &Path, target: &Path, title: &str) ->
             let rel = relative(from.parent().unwrap_or(Path::new("")), target);
             format!("[{title}]({})", emit_target(&rel))
         }
+        LinkStyle::MarkdownCanonical => format!("[{title}]({})", emit_target(&canonical)),
+        LinkStyle::PlainRoot => format!("/{canonical}"),
         LinkStyle::PlainRelative => relative(from.parent().unwrap_or(Path::new("")), target),
         LinkStyle::PlainCanonical => canonical.into_owned(),
     }
@@ -430,11 +532,13 @@ fn format_path(
 /// selects: workspace-absolute (`/canonical`), relative, or canonical.
 pub fn path_text(path_style: LinkStyle, from: &Path, to: &Path) -> String {
     match path_style {
-        LinkStyle::MarkdownRoot => format!("/{}", to.to_string_lossy()),
+        LinkStyle::MarkdownRoot | LinkStyle::PlainRoot => format!("/{}", to.to_string_lossy()),
         LinkStyle::MarkdownRelative | LinkStyle::PlainRelative => {
             relative(from.parent().unwrap_or(Path::new("")), to)
         }
-        LinkStyle::PlainCanonical => to.to_string_lossy().into_owned(),
+        LinkStyle::MarkdownCanonical | LinkStyle::PlainCanonical => {
+            to.to_string_lossy().into_owned()
+        }
     }
 }
 
@@ -898,13 +1002,33 @@ mod tests {
     }
 
     #[test]
-    fn link_style_reads_the_config_spelling_and_titles_fall_back_to_the_path() {
-        assert_eq!(LinkStyle::from_config_str("markdown_root"), Some(LinkStyle::MarkdownRoot));
-        assert_eq!(LinkStyle::from_config_str("plain_canonical"), Some(LinkStyle::PlainCanonical));
-        assert_eq!(LinkStyle::from_config_str("nonsense"), None);
+    fn link_style_axes_round_trip_and_cover_all_six_combinations() {
+        use Notation::*;
+        use PathStyle::*;
+        // Every notation×path_style combination has a fused LinkStyle, and axes()
+        // is its inverse — so the orthogonal config surface is lossless.
+        for notation in [Markdown, Bare] {
+            for path_style in [Root, Relative, Canonical] {
+                let style = LinkStyle::from_axes(notation, path_style);
+                assert_eq!(style.axes(), (notation, path_style));
+            }
+        }
+        // Wikilink has no bare/bracketed split, so it maps through the Markdown
+        // family and its path text follows the path style.
+        assert_eq!(LinkStyle::from_axes(Wikilink, Canonical), LinkStyle::MarkdownCanonical);
+        assert_eq!(Notation::from_wrapper(Wrapper::Wikilink, LinkStyle::MarkdownRoot), Wikilink);
+        assert_eq!(Notation::from_config_str("bare"), Some(Bare));
+        assert_eq!(PathStyle::from_config_str("canonical"), Some(Canonical));
         assert_eq!(LinkStyle::default(), LinkStyle::MarkdownRoot);
         assert_eq!(path_to_title(Path::new("Folder/utility_index.md")), "Utility Index");
-        assert_eq!(path_to_title(Path::new("README.md")), "README");
+    }
+
+    #[test]
+    fn the_two_new_link_styles_render_bracketed_canonical_and_bare_root() {
+        let from = Path::new("a/b.md");
+        let to = Path::new("c/d.md");
+        assert_eq!(format_link(LinkStyle::MarkdownCanonical, from, to, "D"), "[D](c/d.md)");
+        assert_eq!(format_link(LinkStyle::PlainRoot, from, to, "D"), "/c/d.md");
     }
 
     #[test]

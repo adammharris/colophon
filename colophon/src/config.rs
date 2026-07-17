@@ -1,22 +1,25 @@
 //! Workspace configuration — the typed policy a standalone/CLI workspace reads
 //! from its **config document** (the `config`-relation target from the root,
-//! DESIGN §6's reachability move applied to policy).
+//! DESIGN §6's reachability move applied to policy) and from its root's
+//! `colophon:` frontmatter block.
 //!
 //! Programmatic embedders never need this: they configure the [`Workspace`]
 //! directly through the builder (`.link_style`, `.identity`, …), which is why
 //! the type-level identity/index choice lives there. `WorkspaceConfig` is the
 //! **data** shape that lets a workspace configure *itself* — so the same tool
 //! serves a Diaryx-style vault and an Obsidian-style one purely by what the
-//! config document declares:
+//! config declares:
 //!
 //! - [`WorkspaceConfig::paths_only`] — path links, identity off (pure paths).
 //! - [`WorkspaceConfig::stable_ids`] — stable IDs minted lazily (registry +
 //!   backlinks), portable links for the path-based parts.
 //!
-//! Each field maps to a config-document key ([`apply`](WorkspaceConfig::apply) /
-//! [`to_mapping`](WorkspaceConfig::to_mapping)); unset keys keep their default,
-//! and layering root-frontmatter then the config document gives the precedence
-//! *config document > root frontmatter > default*.
+//! The vocabulary (`docs/config-vocab.md`) is one namespace of keys with two
+//! homes: nested under `colophon:` in the root's frontmatter (the description
+//! home) or at the top level of the dedicated config document (the policy home).
+//! [`apply`](WorkspaceConfig::apply) reads either shape; unset keys keep their
+//! default, and layering root block then config document gives the precedence
+//! *config document > root `colophon:` block > default*.
 //!
 //! [`Workspace`]: crate::workspace::Workspace
 
@@ -25,19 +28,35 @@ use std::collections::BTreeMap;
 use crate::content::ContentFormat;
 use crate::document::EmbedStyle;
 use crate::identity::Registration;
-use crate::link::{Addressing, LinkStyle, ReferenceStyle, Wrapper};
+use crate::link::{Addressing, LinkStyle, Notation, PathStyle, ReferenceStyle};
 use crate::meta::{Mapping, Value};
 
-/// A per-relation reference-style override, as declared in a config document's
+/// The config-vocabulary version stamped as `spec` and recognized on read — a
+/// marker so a foreign tool (or a future colophon) knows which vocabulary it is
+/// looking at. Bumped only on an incompatible reshape.
+pub const SPEC_VERSION: i64 = 1;
+
+/// The root-frontmatter key under which workspace policy is nested. A root
+/// document's frontmatter mixes structural links, identity, and user-owned
+/// fields with the occasional policy setting; nesting policy under this one key
+/// keeps the two apart, so config is unambiguous to read *and* to lint, and an
+/// unrecognized *sibling* is never mistaken for a misspelled setting. The
+/// dedicated config document needs no such wrapper — the whole document is policy
+/// (`docs/config-vocab.md`, "The two homes").
+pub const ROOT_CONFIG_KEY: &str = "colophon";
+
+/// A per-relation reference-style override, as declared in a config's
 /// `relations` block. Each axis is optional and inherits the workspace default
 /// ([`WorkspaceConfig::reference_style`]) when absent — so a block need only name
-/// the axes it changes. This is the config-document form of
+/// the axes it changes. This is the config form of
 /// [`Relation::style`](crate::relation::Relation::style), and what lets links
 /// going "down" (`contents`) differ from links going "up" (`part_of`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RelationStyleConfig {
-    /// The wrapper override (`markdown` / `wikilink`).
-    pub wrapper: Option<Wrapper>,
+    /// The notation override (`markdown` / `wikilink` / `bare`).
+    pub notation: Option<Notation>,
+    /// The path-resolution override (`root` / `relative` / `canonical`).
+    pub path_style: Option<PathStyle>,
     /// The addressing override (`path` / `id` / `alias`).
     pub target: Option<Addressing>,
     /// The `id`-wikilink label override.
@@ -49,20 +68,20 @@ pub struct RelationStyleConfig {
 /// how references are spelled; this is purely the ID's *home*.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IdStorage {
-    /// **Registry only**: IDs live solely in the registry document —
+    /// **Registry only** (`registry`): IDs live solely in the registry document —
     /// authoritative, non-derivable, resolved by direct lookup. The cleanest
     /// documents (no `id` clutter), but identity does not travel with a file.
     Registry,
-    /// **Frontmatter + registry cache** (the default): each document also carries
-    /// its own ID in an `id` frontmatter field (a portable, self-describing
+    /// **Frontmatter + registry** (`both`, the default): each document also
+    /// carries its own ID in an `id` frontmatter field (a portable, self-describing
     /// shadow), and the registry is retained as a rebuildable cache + tombstone
     /// ledger. The ID travels with the file across copies and out-of-band moves.
     #[default]
     Frontmatter,
-    /// **Frontmatter only**: the `id` field is the sole home; no registry
-    /// document is written and resolution rebuilds the id→path map by scanning
-    /// frontmatter. Maximally self-describing, but it forfeits tombstones (a
-    /// deleted file takes its ID with it), so an ID can in principle be reminted.
+    /// **Frontmatter only** (`frontmatter`): the `id` field is the sole home; no
+    /// registry document is written and resolution rebuilds the id→path map by
+    /// scanning frontmatter. Maximally self-describing, but it forfeits tombstones
+    /// (a deleted file takes its ID with it), so an ID can in principle be reminted.
     FrontmatterOnly,
 }
 
@@ -78,12 +97,13 @@ impl IdStorage {
         matches!(self, IdStorage::Registry | IdStorage::Frontmatter)
     }
 
-    /// Parse the `id_storage` config spelling; unknown → `None`.
+    /// Parse the `id_storage` config spelling; unknown → `None`. `both` is the
+    /// frontmatter+registry default; `frontmatter` is the registry-less mode.
     pub fn from_config_str(value: &str) -> Option<Self> {
         match value {
             "registry" => Some(Self::Registry),
-            "frontmatter" => Some(Self::Frontmatter),
-            "frontmatter_only" => Some(Self::FrontmatterOnly),
+            "both" => Some(Self::Frontmatter),
+            "frontmatter" => Some(Self::FrontmatterOnly),
             _ => None,
         }
     }
@@ -92,8 +112,8 @@ impl IdStorage {
     pub fn as_config_str(self) -> &'static str {
         match self {
             Self::Registry => "registry",
-            Self::Frontmatter => "frontmatter",
-            Self::FrontmatterOnly => "frontmatter_only",
+            Self::Frontmatter => "both",
+            Self::FrontmatterOnly => "frontmatter",
         }
     }
 }
@@ -112,19 +132,19 @@ impl IdStorage {
 /// its corruption already surfaces as parse or link findings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Fixity {
-    /// No content checksums are recorded or verified.
+    /// No content checksums are recorded or verified (`off`).
     Off,
-    /// **Attachments only** (the default): each attachment sidecar records a
-    /// `content_hash` of its payload, and `check` verifies it. Unambiguous — a
-    /// payload's bytes changing is always corruption — so there is no edit
-    /// friction and nothing to opt out of per document.
+    /// **Attachments only** (`attachments`, the default): each attachment sidecar
+    /// records a `content_hash` of its payload, and `check` verifies it.
+    /// Unambiguous — a payload's bytes changing is always corruption — so there is
+    /// no edit friction and nothing to opt out of per document.
     #[default]
     Payloads,
-    /// **Attachments and document bodies**: additionally, each document records a
-    /// `content_hash` of its *body* (never its frontmatter). The archival-grade
-    /// tier; because a body is editable, pair it with `colophon edit` so a body
-    /// change restamps the hash, and treat an out-of-band edit as a `check`
-    /// finding to re-bless rather than a hard error.
+    /// **Attachments and document bodies** (`all`): additionally, each document
+    /// records a `content_hash` of its *body* (never its frontmatter). The
+    /// archival-grade tier; because a body is editable, pair it with
+    /// `colophon edit` so a body change restamps the hash, and treat an
+    /// out-of-band edit as a `check` finding to re-bless rather than a hard error.
     Full,
 }
 
@@ -134,7 +154,7 @@ impl Fixity {
         matches!(self, Fixity::Payloads | Fixity::Full)
     }
 
-    /// Whether document bodies are checksummed (only the `full` tier).
+    /// Whether document bodies are checksummed (only the `all` tier).
     pub fn covers_bodies(self) -> bool {
         matches!(self, Fixity::Full)
     }
@@ -143,8 +163,8 @@ impl Fixity {
     pub fn from_config_str(value: &str) -> Option<Self> {
         match value {
             "off" => Some(Self::Off),
-            "payloads" => Some(Self::Payloads),
-            "full" => Some(Self::Full),
+            "attachments" => Some(Self::Payloads),
+            "all" => Some(Self::Full),
             _ => None,
         }
     }
@@ -153,43 +173,36 @@ impl Fixity {
     pub fn as_config_str(self) -> &'static str {
         match self {
             Self::Off => "off",
-            Self::Payloads => "payloads",
-            Self::Full => "full",
+            Self::Payloads => "attachments",
+            Self::Full => "all",
         }
     }
 }
 
-/// The workspace-wide policy a config document declares.
+/// The workspace-wide policy a config declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceConfig {
-    /// How path links (`part_of`/`contents`/`links`) are written.
-    pub link_format: LinkStyle,
     /// When a document earns a stable ID — the identity registration triggers.
     pub identity: Registration,
-    /// Whether colophon *authors* durable structural links by id (registering
-    /// the target) rather than a path — the Obsidian-style, move-stable link.
-    /// Ignored unless identity registers on a link. A convenience over the
-    /// richer `reference_*` axes; superseded by `reference_target` when set.
-    pub id_links: bool,
-    /// The default reference **wrapper** (`markdown` / `wikilink`) — `None`
-    /// derives markdown, the diaryx-shaped default. Overridden per relation by
-    /// [`Relation::style`](crate::relation::Relation::style).
-    pub reference_wrapper: Option<Wrapper>,
-    /// The default reference **addressing** (`path` / `id` / `alias`) — `None`
-    /// derives from `id_links` (id when set, else path).
-    pub reference_target: Option<Addressing>,
-    /// Whether id links carry a `|Title` label (an `id` wikilink) or a `[Title]`
-    /// (a markdown id link) — `None` derives `false` (a bare id link).
-    pub reference_label: Option<bool>,
+    /// The default reference **notation** (`markdown` / `wikilink` / `bare`).
+    /// Overridden per relation by [`Relation::style`](crate::relation::Relation::style).
+    pub notation: Notation,
+    /// The default **path resolution** for path targets (`root` / `relative` /
+    /// `canonical`). Ignored for id/alias targets.
+    pub path_style: PathStyle,
+    /// The default reference **addressing** (`path` / `id` / `alias`).
+    pub reference_target: Addressing,
+    /// Whether an id/alias reference carries a `|Title` label.
+    pub reference_label: bool,
     /// Per-relation reference-style overrides, keyed by relation name — the
-    /// config-document form of [`Relation::style`](crate::relation::Relation::style).
+    /// config form of [`Relation::style`](crate::relation::Relation::style).
     /// Each entry overlays the workspace default for that relation only, letting
     /// `contents` (down) and `part_of` (up) carry different styles. Empty means
     /// every relation inherits the default. Resolve with
     /// [`resolved_relation_styles`](Self::resolved_relation_styles).
     pub relation_styles: BTreeMap<String, RelationStyleConfig>,
     /// Where a document's stable ID is persisted — registry, frontmatter shadow,
-    /// or frontmatter only (DESIGN §5). Independent of the `identity` trigger.
+    /// or both (DESIGN §5). Independent of the `identity` trigger.
     pub id_storage: IdStorage,
     /// The metadata format new documents get when they inherit no parent block
     /// — a *default* for authoring, never a workspace constraint (§7).
@@ -214,27 +227,26 @@ pub struct WorkspaceConfig {
     /// default), attachments plus document bodies, or off.
     pub fixity: Fixity,
     /// The frontmatter field `colophon edit` stamps with the current time when a
-    /// document's content changes — the "last updated" provenance field. Empty
-    /// (the default) disables it. The *name* is yours (vocabulary — `updated`,
+    /// document's content changes — the machine-maintained "last updated" field.
+    /// Empty (the default) disables it. The *name* is yours (`updated`,
     /// `modified`, `lastmod`); the *value* is always machine-standard (RFC 3339
     /// UTC), because colophon reads it back to know when to rewrite it. A
     /// human-friendly date is a *different*, user-owned field colophon never
     /// touches (see DESIGN §2, "does colophon read it back?").
-    pub updated_field: String,
+    pub updated: String,
 }
 
 impl Default for WorkspaceConfig {
-    /// The standalone default: portable markdown-root links, identity available
-    /// lazily (IDs minted only on a durable link-by-id or publish, §4), and
-    /// path links (id-linking is opt-in).
+    /// The standalone default: portable markdown-root path links, identity
+    /// available lazily (IDs minted only on a durable link-by-id or publish, §4),
+    /// and path addressing (id-linking is opt-in).
     fn default() -> Self {
         Self {
-            link_format: LinkStyle::default(),
             identity: Registration::LAZY,
-            id_links: false,
-            reference_wrapper: None,
-            reference_target: None,
-            reference_label: None,
+            notation: Notation::Markdown,
+            path_style: PathStyle::Root,
+            reference_target: Addressing::Path,
+            reference_label: false,
             relation_styles: BTreeMap::new(),
             id_storage: IdStorage::Frontmatter,
             default_embed_format: fig::Format::Yaml,
@@ -242,7 +254,7 @@ impl Default for WorkspaceConfig {
             content_format: ContentFormat::Markdown,
             recycle_bin: true,
             fixity: Fixity::Payloads,
-            updated_field: String::new(),
+            updated: String::new(),
         }
     }
 }
@@ -252,20 +264,9 @@ impl WorkspaceConfig {
     /// workspace is addressed purely by path (the Adam's-Archive shape).
     pub fn paths_only() -> Self {
         Self {
-            link_format: LinkStyle::MarkdownRoot,
             identity: Registration::OFF,
-            id_links: false,
-            reference_wrapper: None,
-            reference_target: None,
-            reference_label: None,
-            relation_styles: BTreeMap::new(),
             id_storage: IdStorage::Registry,
-            default_embed_format: fig::Format::Yaml,
-            embed_style: EmbedStyle::Delimited,
-            content_format: ContentFormat::Markdown,
-            recycle_bin: true,
-            fixity: Fixity::Payloads,
-            updated_field: String::new(),
+            ..Self::default()
         }
     }
 
@@ -274,34 +275,28 @@ impl WorkspaceConfig {
     /// the registry keeps them resolving. Portable path links for the rest.
     pub fn stable_ids() -> Self {
         Self {
-            link_format: LinkStyle::MarkdownRoot,
             identity: Registration::LAZY,
-            id_links: true,
-            reference_wrapper: None,
-            reference_target: None,
-            reference_label: None,
-            relation_styles: BTreeMap::new(),
+            reference_target: Addressing::Id,
             id_storage: IdStorage::Registry,
-            default_embed_format: fig::Format::Yaml,
-            embed_style: EmbedStyle::Delimited,
-            content_format: ContentFormat::Markdown,
-            recycle_bin: true,
-            fixity: Fixity::Payloads,
-            updated_field: String::new(),
+            ..Self::default()
         }
     }
 
+    /// The fused path [`LinkStyle`] this config's notation + path resolution
+    /// select — what the [`Workspace`](crate::workspace::Workspace) builder's
+    /// `link_style` expects for authoring structural path links.
+    pub fn link_format(&self) -> LinkStyle {
+        LinkStyle::from_axes(self.notation, self.path_style)
+    }
+
     /// The effective workspace-default [`ReferenceStyle`] — the fallback for any
-    /// relation without its own override. Composes the explicit `reference_*`
-    /// axes over the legacy `link_format`/`id_links` inputs, so an existing
-    /// config (which sets neither `reference_*` key) behaves exactly as before.
+    /// relation without its own override, composed from the four reference axes.
     pub fn reference_style(&self) -> ReferenceStyle {
-        let derived_addressing = if self.id_links { Addressing::Id } else { Addressing::Path };
         ReferenceStyle {
-            wrapper: self.reference_wrapper.unwrap_or(Wrapper::Markdown),
-            addressing: self.reference_target.unwrap_or(derived_addressing),
-            label: self.reference_label.unwrap_or(false),
-            path_style: self.link_format,
+            wrapper: self.notation.wrapper(),
+            addressing: self.reference_target,
+            label: self.reference_label,
+            path_style: LinkStyle::from_axes(self.notation, self.path_style),
         }
         .normalized()
     }
@@ -310,21 +305,24 @@ impl WorkspaceConfig {
     /// each partial overlaid on the workspace default ([`reference_style`]) and
     /// normalized. Feed the result to
     /// [`RelationSet::with_styles`](crate::relation::RelationSet::with_styles) to
-    /// build the workspace's relation vocabulary from a config document. Empty
-    /// when no relation declares an override — every relation then inherits the
-    /// default.
+    /// build the workspace's relation vocabulary from a config. Empty when no
+    /// relation declares an override — every relation then inherits the default.
     ///
     /// [`reference_style`]: Self::reference_style
     pub fn resolved_relation_styles(&self) -> BTreeMap<String, ReferenceStyle> {
         let base = self.reference_style();
+        let base_notation = Notation::from_wrapper(base.wrapper, base.path_style);
+        let base_path = base.path_style.axes().1;
         self.relation_styles
             .iter()
             .map(|(name, over)| {
+                let notation = over.notation.unwrap_or(base_notation);
+                let path = over.path_style.unwrap_or(base_path);
                 let style = ReferenceStyle {
-                    wrapper: over.wrapper.unwrap_or(base.wrapper),
+                    wrapper: notation.wrapper(),
                     addressing: over.target.unwrap_or(base.addressing),
                     label: over.label.unwrap_or(base.label),
-                    path_style: base.path_style,
+                    path_style: LinkStyle::from_axes(notation, path),
                 }
                 .normalized();
                 (name.clone(), style)
@@ -333,89 +331,88 @@ impl WorkspaceConfig {
     }
 
     /// Overlay the recognized keys present in `meta` onto this config; absent
-    /// keys keep their current value. Apply root frontmatter first, then the
-    /// config document, so the config document wins.
+    /// keys keep their current value. `meta` is either a root's `colophon:` block
+    /// or a config document's top-level mapping — the same nested shape. Apply the
+    /// root block first, then the config document, so the config document wins.
     pub fn apply(&mut self, meta: &Value) {
-        if let Some(style) =
-            meta.get("link_format").and_then(Value::as_str).and_then(LinkStyle::from_config_str)
+        if let Some(v) =
+            meta.get("content_format").and_then(Value::as_str).and_then(ContentFormat::from_config_str)
         {
-            self.link_format = style;
+            self.content_format = v;
         }
-        if let Some(registration) =
-            meta.get("identity").and_then(Value::as_str).and_then(registration_from_str)
-        {
-            self.identity = registration;
+        if let Some(md) = meta.get("metadata") {
+            if let Some(v) = md.get("format").and_then(Value::as_str).and_then(format_from_str) {
+                self.default_embed_format = v;
+            }
+            if let Some(v) =
+                md.get("embed").and_then(Value::as_str).and_then(EmbedStyle::from_config_str)
+            {
+                self.embed_style = v;
+            }
         }
-        if let Some(id_links) = meta.get("id_links").and_then(Value::as_bool) {
-            self.id_links = id_links;
+        if let Some(rf) = meta.get("references") {
+            if let Some(v) =
+                rf.get("notation").and_then(Value::as_str).and_then(Notation::from_config_str)
+            {
+                self.notation = v;
+            }
+            if let Some(v) =
+                rf.get("path_style").and_then(Value::as_str).and_then(PathStyle::from_config_str)
+            {
+                self.path_style = v;
+            }
+            if let Some(v) =
+                rf.get("target").and_then(Value::as_str).and_then(Addressing::from_config_str)
+            {
+                self.reference_target = v;
+            }
+            if let Some(v) = rf.get("label").and_then(Value::as_bool) {
+                self.reference_label = v;
+            }
         }
-        if let Some(wrapper) =
-            meta.get("reference_wrapper").and_then(Value::as_str).and_then(Wrapper::from_config_str)
-        {
-            self.reference_wrapper = Some(wrapper);
-        }
-        if let Some(target) =
-            meta.get("reference_target").and_then(Value::as_str).and_then(Addressing::from_config_str)
-        {
-            self.reference_target = Some(target);
-        }
-        if let Some(label) = meta.get("reference_label").and_then(Value::as_bool) {
-            self.reference_label = Some(label);
-        }
-        // Per-relation style overrides: `relations: { <name>: { style: { … } } }`.
-        // Each axis present overlays that relation's entry; absent axes keep
-        // whatever the entry (or, later, the workspace default) already holds.
+        // Per-relation overrides: `relations: { <name>: { notation, target, … } }`.
         if let Some(relations) = meta.get("relations").and_then(Value::as_mapping) {
             for (name, spec) in relations {
-                let Some(style) = spec.get("style").and_then(Value::as_mapping) else {
-                    continue;
-                };
                 let entry = self.relation_styles.entry(name.clone()).or_default();
-                if let Some(wrapper) =
-                    style.get("wrapper").and_then(Value::as_str).and_then(Wrapper::from_config_str)
+                if let Some(v) =
+                    spec.get("notation").and_then(Value::as_str).and_then(Notation::from_config_str)
                 {
-                    entry.wrapper = Some(wrapper);
+                    entry.notation = Some(v);
                 }
-                if let Some(target) =
-                    style.get("target").and_then(Value::as_str).and_then(Addressing::from_config_str)
+                if let Some(v) =
+                    spec.get("path_style").and_then(Value::as_str).and_then(PathStyle::from_config_str)
                 {
-                    entry.target = Some(target);
+                    entry.path_style = Some(v);
                 }
-                if let Some(label) = style.get("label").and_then(Value::as_bool) {
-                    entry.label = Some(label);
+                if let Some(v) =
+                    spec.get("target").and_then(Value::as_str).and_then(Addressing::from_config_str)
+                {
+                    entry.target = Some(v);
+                }
+                if let Some(v) = spec.get("label").and_then(Value::as_bool) {
+                    entry.label = Some(v);
                 }
             }
         }
-        if let Some(storage) =
+        if let Some(v) =
             meta.get("id_storage").and_then(Value::as_str).and_then(IdStorage::from_config_str)
         {
-            self.id_storage = storage;
+            self.id_storage = v;
         }
-        if let Some(format) =
-            meta.get("embed_format").and_then(Value::as_str).and_then(format_from_str)
+        if let Some(v) = meta.get("updated").and_then(Value::as_str) {
+            self.updated = v.to_string();
+        }
+        if let Some(v) =
+            meta.get("identity").and_then(Value::as_str).and_then(registration_from_str)
         {
-            self.default_embed_format = format;
+            self.identity = v;
         }
-        if let Some(style) =
-            meta.get("embed_type").and_then(Value::as_str).and_then(EmbedStyle::from_config_str)
+        if let Some(v) = meta.get("fixity").and_then(Value::as_str).and_then(Fixity::from_config_str)
         {
-            self.embed_style = style;
+            self.fixity = v;
         }
-        if let Some(content) =
-            meta.get("content_format").and_then(Value::as_str).and_then(ContentFormat::from_config_str)
-        {
-            self.content_format = content;
-        }
-        if let Some(recycle) = meta.get("recycle_bin").and_then(Value::as_bool) {
-            self.recycle_bin = recycle;
-        }
-        if let Some(fixity) =
-            meta.get("fixity").and_then(Value::as_str).and_then(Fixity::from_config_str)
-        {
-            self.fixity = fixity;
-        }
-        if let Some(field) = meta.get("updated_field").and_then(Value::as_str) {
-            self.updated_field = field.to_string();
+        if let Some(v) = meta.get("recycle_bin").and_then(Value::as_bool) {
+            self.recycle_bin = v;
         }
     }
 
@@ -426,52 +423,339 @@ impl WorkspaceConfig {
         config
     }
 
-    /// This config as config-document metadata keys (`link_format`, `identity`).
+    /// This config as config-document metadata keys (the nested vocabulary,
+    /// `docs/config-vocab.md`). Emitted at the top level of the config document;
+    /// the same mapping nests under `colophon:` in a root's frontmatter.
     pub fn to_mapping(&self) -> Mapping {
         let mut map = Mapping::new();
-        map.insert("link_format".into(), Value::String(self.link_format.as_config_str().into()));
-        map.insert("identity".into(), Value::String(registration_str(self.identity).into()));
-        map.insert("id_links".into(), Value::Bool(self.id_links));
-        if let Some(wrapper) = self.reference_wrapper {
-            map.insert("reference_wrapper".into(), Value::String(wrapper.as_config_str().into()));
-        }
-        if let Some(target) = self.reference_target {
-            map.insert("reference_target".into(), Value::String(target.as_config_str().into()));
-        }
-        if let Some(label) = self.reference_label {
-            map.insert("reference_label".into(), Value::Bool(label));
-        }
+        map.insert("spec".into(), Value::Int(SPEC_VERSION));
+        map.insert("content_format".into(), Value::String(self.content_format.as_config_str().into()));
+
+        let mut metadata = Mapping::new();
+        metadata.insert("format".into(), Value::String(format_str(self.default_embed_format).into()));
+        metadata.insert("embed".into(), Value::String(self.embed_style.as_config_str().into()));
+        map.insert("metadata".into(), Value::Mapping(metadata));
+
+        let mut references = Mapping::new();
+        references.insert("notation".into(), Value::String(self.notation.as_config_str().into()));
+        references.insert("path_style".into(), Value::String(self.path_style.as_config_str().into()));
+        references.insert("target".into(), Value::String(self.reference_target.as_config_str().into()));
+        references.insert("label".into(), Value::Bool(self.reference_label));
+        map.insert("references".into(), Value::Mapping(references));
+
         if !self.relation_styles.is_empty() {
             let mut relations = Mapping::new();
             for (name, over) in &self.relation_styles {
-                let mut style = Mapping::new();
-                if let Some(wrapper) = over.wrapper {
-                    style.insert("wrapper".into(), Value::String(wrapper.as_config_str().into()));
+                let mut spec = Mapping::new();
+                if let Some(n) = over.notation {
+                    spec.insert("notation".into(), Value::String(n.as_config_str().into()));
                 }
-                if let Some(target) = over.target {
-                    style.insert("target".into(), Value::String(target.as_config_str().into()));
+                if let Some(p) = over.path_style {
+                    spec.insert("path_style".into(), Value::String(p.as_config_str().into()));
                 }
-                if let Some(label) = over.label {
-                    style.insert("label".into(), Value::Bool(label));
+                if let Some(t) = over.target {
+                    spec.insert("target".into(), Value::String(t.as_config_str().into()));
                 }
-                let mut relation = Mapping::new();
-                relation.insert("style".into(), Value::Mapping(style));
-                relations.insert(name.clone(), Value::Mapping(relation));
+                if let Some(l) = over.label {
+                    spec.insert("label".into(), Value::Bool(l));
+                }
+                relations.insert(name.clone(), Value::Mapping(spec));
             }
             map.insert("relations".into(), Value::Mapping(relations));
         }
+
         map.insert("id_storage".into(), Value::String(self.id_storage.as_config_str().into()));
-        map.insert("embed_format".into(), Value::String(format_str(self.default_embed_format).into()));
-        map.insert("embed_type".into(), Value::String(self.embed_style.as_config_str().into()));
-        map.insert("content_format".into(), Value::String(self.content_format.as_config_str().into()));
-        map.insert("recycle_bin".into(), Value::Bool(self.recycle_bin));
+        map.insert("updated".into(), Value::String(self.updated.clone()));
+        map.insert("identity".into(), Value::String(registration_str(self.identity).into()));
         map.insert("fixity".into(), Value::String(self.fixity.as_config_str().into()));
-        map.insert("updated_field".into(), Value::String(self.updated_field.clone()));
+        map.insert("recycle_bin".into(), Value::Bool(self.recycle_bin));
         map
     }
 }
 
-/// Parse the `embed_format` config value into a metadata format (only the
+// ── Config linting (`docs/config-vocab.md`, "Linting") ──────────────────────
+
+/// A key in a config surface that [`WorkspaceConfig::apply`] would silently
+/// ignore — surfaced so a setting that never takes effect becomes visible rather
+/// than staying invisible. `apply` keeps the current value whenever a key is
+/// unrecognized or its value fails to parse; that robustness is what makes a
+/// typo (`notaton`) or a bad value (`fixity: alll`) vanish without a word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigIssue {
+    /// The offending key, dotted from the block root (`references.notation`).
+    pub key: String,
+    /// What is wrong with it.
+    pub kind: ConfigIssueKind,
+}
+
+/// The two ways a config key goes unread. See [`ConfigIssue`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigIssueKind {
+    /// `key` is not a recognized axis but closely resembles `suggestion` — almost
+    /// certainly a misspelling. An unrecognized key that resembles *no* axis at
+    /// its level is deliberately **not** reported: a config surface can carry
+    /// user-owned fields colophon never reads (DESIGN §2), so flagging every
+    /// unknown key would be noise.
+    UnknownKey { suggestion: String },
+    /// `key` is a recognized axis but `value` is not a spelling colophon
+    /// understands, so `apply` kept the default. `expected` lists the accepted
+    /// spellings (advisory help; mirrors the axis's parser).
+    InvalidValue { value: String, expected: Vec<String> },
+}
+
+/// Top-level config keys (block names + scalar axes + the `spec` marker).
+const TOP_KEYS: &[&str] = &[
+    "spec",
+    "content_format",
+    "metadata",
+    "references",
+    "relations",
+    "id_storage",
+    "updated",
+    "identity",
+    "fixity",
+    "recycle_bin",
+];
+/// Keys inside the `metadata:` block.
+const METADATA_KEYS: &[&str] = &["format", "embed"];
+/// Keys inside the `references:` block and each `relations.<name>` entry.
+const REFERENCE_KEYS: &[&str] = &["notation", "path_style", "target", "label"];
+
+/// If `meta` declares a `spec` newer than [`SPEC_VERSION`] — the version this
+/// build understands — the declared version. The signal that colophon may be
+/// silently ignoring settings a newer colophon wrote. `None` when `spec` is
+/// absent, not an integer, or within range. Shared by `check` (a
+/// `Finding::ConfigSpecAhead`) and the CLI's proactive config warning, so the
+/// version comparison lives in one place.
+pub fn spec_ahead(meta: &Value) -> Option<i64> {
+    match meta.get("spec") {
+        Some(Value::Int(v)) if *v > SPEC_VERSION => Some(*v),
+        _ => None,
+    }
+}
+
+/// Diagnose a config surface (a root's `colophon:` block or a config document's
+/// top-level mapping): one [`ConfigIssue`] per key `apply` would silently ignore.
+/// Recognized keys are checked for a value colophon can parse; unrecognized keys
+/// are reported only when they closely resemble a real axis at their level (a
+/// likely typo). Returns empty for a clean config.
+pub fn diagnose(meta: &Value) -> Vec<ConfigIssue> {
+    let mut issues = Vec::new();
+    let Some(map) = meta.as_mapping() else {
+        return issues;
+    };
+    for (key, value) in map {
+        match key.as_str() {
+            "spec" => {} // version marker — not a policy axis
+            "content_format" => {
+                enum_axis(&mut issues, key, value, |s| ContentFormat::from_config_str(s).is_some(), &[
+                    "markdown", "djot", "html",
+                ]);
+            }
+            "id_storage" => {
+                enum_axis(&mut issues, key, value, |s| IdStorage::from_config_str(s).is_some(), &[
+                    "registry",
+                    "frontmatter",
+                    "both",
+                ]);
+            }
+            "identity" => {
+                enum_axis(&mut issues, key, value, |s| registration_from_str(s).is_some(), &[
+                    "none", "lazy", "eager",
+                ]);
+            }
+            "fixity" => {
+                enum_axis(&mut issues, key, value, |s| Fixity::from_config_str(s).is_some(), &[
+                    "off",
+                    "attachments",
+                    "all",
+                ]);
+            }
+            "recycle_bin" => bool_axis(&mut issues, key, value),
+            "updated" => {} // free-form field name
+            "metadata" => diagnose_metadata(&mut issues, value),
+            "references" => diagnose_reference_block(&mut issues, "references", value),
+            "relations" => diagnose_relations(&mut issues, value),
+            other => {
+                if let Some(suggestion) = nearest(other, TOP_KEYS) {
+                    issues.push(unknown(key.clone(), suggestion));
+                }
+            }
+        }
+    }
+    issues
+}
+
+/// Diagnose the `metadata:` block.
+fn diagnose_metadata(issues: &mut Vec<ConfigIssue>, value: &Value) {
+    let Some(map) = value.as_mapping() else {
+        return block_shape_issue(issues, "metadata", value);
+    };
+    for (key, v) in map {
+        let dotted = format!("metadata.{key}");
+        match key.as_str() {
+            "format" => enum_axis(issues, &dotted, v, |s| format_from_str(s).is_some(), &embed_format_spellings()),
+            "embed" => enum_axis(issues, &dotted, v, |s| EmbedStyle::from_config_str(s).is_some(), &[
+                "delimited",
+                "code_block",
+                "html_script",
+                "html_code",
+                "separate",
+            ]),
+            other => {
+                if let Some(sug) = nearest(other, METADATA_KEYS) {
+                    issues.push(unknown(dotted, format!("metadata.{sug}")));
+                }
+            }
+        }
+    }
+}
+
+/// Diagnose a `references:`-shaped block (the workspace default or a
+/// `relations.<name>` entry), `prefix` dotting the reported keys.
+fn diagnose_reference_block(issues: &mut Vec<ConfigIssue>, prefix: &str, value: &Value) {
+    let Some(map) = value.as_mapping() else {
+        return block_shape_issue(issues, prefix, value);
+    };
+    for (key, v) in map {
+        let dotted = format!("{prefix}.{key}");
+        match key.as_str() {
+            "notation" => enum_axis(issues, &dotted, v, |s| Notation::from_config_str(s).is_some(), &[
+                "markdown", "wikilink", "bare",
+            ]),
+            "path_style" => enum_axis(issues, &dotted, v, |s| PathStyle::from_config_str(s).is_some(), &[
+                "root", "relative", "canonical",
+            ]),
+            "target" => enum_axis(issues, &dotted, v, |s| Addressing::from_config_str(s).is_some(), &[
+                "path", "id", "alias",
+            ]),
+            "label" => bool_axis(issues, &dotted, v),
+            other => {
+                if let Some(sug) = nearest(other, REFERENCE_KEYS) {
+                    issues.push(unknown(dotted, format!("{prefix}.{sug}")));
+                }
+            }
+        }
+    }
+}
+
+/// Diagnose the `relations:` block — a mapping of relation name to a
+/// reference-shaped override.
+fn diagnose_relations(issues: &mut Vec<ConfigIssue>, value: &Value) {
+    let Some(map) = value.as_mapping() else {
+        return block_shape_issue(issues, "relations", value);
+    };
+    for (name, spec) in map {
+        diagnose_reference_block(issues, &format!("relations.{name}"), spec);
+    }
+}
+
+/// Flag a block key whose value is not a mapping (e.g. `references: markdown`).
+fn block_shape_issue(issues: &mut Vec<ConfigIssue>, key: &str, value: &Value) {
+    issues.push(ConfigIssue {
+        key: key.to_string(),
+        kind: ConfigIssueKind::InvalidValue {
+            value: value_summary(value),
+            expected: vec!["a block of keys".into()],
+        },
+    });
+}
+
+/// Check an enum-valued axis, pushing an `InvalidValue` (with the accepted
+/// spellings) when the written value does not parse.
+fn enum_axis(
+    issues: &mut Vec<ConfigIssue>,
+    key: &str,
+    value: &Value,
+    parses: impl Fn(&str) -> bool,
+    expected: &[&str],
+) {
+    if !value.as_str().is_some_and(parses) {
+        issues.push(ConfigIssue {
+            key: key.to_string(),
+            kind: ConfigIssueKind::InvalidValue {
+                value: value_summary(value),
+                expected: expected.iter().map(|s| s.to_string()).collect(),
+            },
+        });
+    }
+}
+
+/// Check a bool-valued axis.
+fn bool_axis(issues: &mut Vec<ConfigIssue>, key: &str, value: &Value) {
+    if value.as_bool().is_none() {
+        issues.push(ConfigIssue {
+            key: key.to_string(),
+            kind: ConfigIssueKind::InvalidValue {
+                value: value_summary(value),
+                expected: vec!["true".into(), "false".into()],
+            },
+        });
+    }
+}
+
+fn unknown(key: String, suggestion: String) -> ConfigIssue {
+    ConfigIssue { key, kind: ConfigIssueKind::UnknownKey { suggestion } }
+}
+
+/// The `metadata.format` spellings compiled into this build (yaml is always
+/// available; the rest are feature-gated, matching [`format_from_str`]).
+fn embed_format_spellings() -> Vec<&'static str> {
+    // `mut` is used only when a format feature below is compiled in.
+    #[allow(unused_mut)]
+    let mut v = vec!["yaml"];
+    #[cfg(feature = "json")]
+    v.push("json");
+    #[cfg(feature = "toml")]
+    v.push("toml");
+    #[cfg(feature = "fig-lang")]
+    v.push("fig");
+    v
+}
+
+/// A short, human-readable rendering of a config value for a diagnostic message.
+fn value_summary(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        _ => "(non-scalar)".to_string(),
+    }
+}
+
+/// The recognized key at `candidates` that most resembles `key`, when one is
+/// within a small edit distance (a likely typo) — else `None`. Distance is
+/// measured case-sensitively so a case-only slip surfaces its canonical spelling.
+/// The threshold (2) is deliberately tight: recognized keys are distinctive
+/// enough that structural fields (`title`, `part_of`, `id`) and ordinary user
+/// fields fall outside it, so they are never mistaken for typos.
+fn nearest(key: &str, candidates: &[&str]) -> Option<String> {
+    candidates
+        .iter()
+        .map(|cand| (levenshtein(key, cand), *cand))
+        .filter(|(d, _)| (1..=2).contains(d))
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, cand)| cand.to_string())
+}
+
+/// Levenshtein edit distance — the classic two-row dynamic program.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, ca) in a.chars().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == *cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Parse the `metadata.format` config value into a metadata format (only the
 /// compiled-in formats are recognized; others → `None`, keeping the default).
 fn format_from_str(value: &str) -> Option<fig::Format> {
     match value {
@@ -486,7 +770,7 @@ fn format_from_str(value: &str) -> Option<fig::Format> {
     }
 }
 
-/// The `embed_format` config spelling for a metadata format.
+/// The `metadata.format` config spelling for a metadata format.
 fn format_str(format: fig::Format) -> &'static str {
     match format {
         #[cfg(feature = "json")]
@@ -502,7 +786,7 @@ fn format_str(format: fig::Format) -> &'static str {
 /// Parse the `identity` config value into a registration trigger set.
 fn registration_from_str(value: &str) -> Option<Registration> {
     match value {
-        "off" => Some(Registration::OFF),
+        "none" => Some(Registration::OFF),
         "lazy" => Some(Registration::LAZY),
         "eager" => Some(Registration::EAGER),
         _ => None,
@@ -513,7 +797,7 @@ fn registration_from_str(value: &str) -> Option<Registration> {
 /// combination (not one of the three presets) is reported as its nearest name.
 fn registration_str(registration: Registration) -> &'static str {
     match registration {
-        Registration::OFF => "off",
+        Registration::OFF => "none",
         Registration::EAGER => "eager",
         _ => "lazy",
     }
@@ -524,29 +808,44 @@ mod tests {
     use super::*;
     use crate::identity::Trigger;
 
-    #[test]
-    fn presets_encode_the_two_styles() {
-        // Diaryx: no identity, path links. Obsidian: identity + id-linking.
-        assert_eq!(WorkspaceConfig::paths_only().identity, Registration::OFF);
-        assert!(!WorkspaceConfig::paths_only().id_links);
-        assert!(WorkspaceConfig::stable_ids().identity.fires_on(Trigger::Link));
-        assert!(WorkspaceConfig::stable_ids().id_links);
+    /// A config surface as a `Value::Mapping` from `(key, value)` pairs, values
+    /// inferred as bools where they parse.
+    fn config_doc(pairs: &[(&str, &str)]) -> Value {
+        let mut map = Mapping::new();
+        for (k, v) in pairs {
+            let value = match *v {
+                "true" => Value::Bool(true),
+                "false" => Value::Bool(false),
+                other => Value::String(other.into()),
+            };
+            map.insert((*k).into(), value);
+        }
+        Value::Mapping(map)
     }
 
     #[test]
-    fn round_trips_through_a_metadata_mapping() {
+    fn presets_encode_the_two_styles() {
+        // Diaryx: no identity, path addressing. Obsidian: identity + id addressing.
+        assert_eq!(WorkspaceConfig::paths_only().identity, Registration::OFF);
+        assert_eq!(WorkspaceConfig::paths_only().reference_target, Addressing::Path);
+        assert!(WorkspaceConfig::stable_ids().identity.fires_on(Trigger::Link));
+        assert_eq!(WorkspaceConfig::stable_ids().reference_target, Addressing::Id);
+    }
+
+    #[test]
+    fn round_trips_through_a_nested_mapping() {
         let config = WorkspaceConfig {
-            link_format: LinkStyle::PlainRelative,
             identity: Registration::EAGER,
-            id_links: true,
-            reference_wrapper: Some(Wrapper::Wikilink),
-            reference_target: Some(Addressing::Id),
-            reference_label: Some(true),
+            notation: Notation::Bare,
+            path_style: PathStyle::Canonical,
+            reference_target: Addressing::Id,
+            reference_label: true,
             relation_styles: BTreeMap::from([
                 (
                     "contents".to_string(),
                     RelationStyleConfig {
-                        wrapper: Some(Wrapper::Wikilink),
+                        notation: Some(Notation::Wikilink),
+                        path_style: None,
                         target: Some(Addressing::Alias),
                         label: None,
                     },
@@ -554,7 +853,8 @@ mod tests {
                 (
                     "part_of".to_string(),
                     RelationStyleConfig {
-                        wrapper: Some(Wrapper::Markdown),
+                        notation: Some(Notation::Markdown),
+                        path_style: Some(PathStyle::Relative),
                         target: Some(Addressing::Id),
                         label: Some(false),
                     },
@@ -564,10 +864,9 @@ mod tests {
             default_embed_format: fig::Format::Yaml,
             embed_style: EmbedStyle::CodeBlock,
             content_format: ContentFormat::Djot,
-            // Non-default, so the round-trip actually exercises the axis.
             recycle_bin: false,
             fixity: Fixity::Full,
-            updated_field: "modified".to_string(),
+            updated: "modified".to_string(),
         };
         let back = WorkspaceConfig::from_meta(&Value::Mapping(config.to_mapping()));
         assert_eq!(back, config);
@@ -575,82 +874,160 @@ mod tests {
 
     #[test]
     fn per_relation_styles_resolve_over_the_workspace_default() {
-        // The diaryx up≠down example: a workspace default of `id`, with `contents`
-        // (down) overridden to a nominal alias wikilink and `part_of` (up) to a
-        // bare markdown id link — each partial overlaying the default.
+        // The diaryx up≠down example: a workspace default target of `id`, with
+        // `contents` (down) overridden to a nominal alias wikilink and `part_of`
+        // (up) to a bare markdown id link — each partial overlaying the default.
         let mut cfg = WorkspaceConfig::default();
-        let mut doc = Mapping::new();
-        doc.insert("reference_target".into(), Value::String("id".into()));
-        let mut contents_style = Mapping::new();
-        contents_style.insert("wrapper".into(), Value::String("wikilink".into()));
-        contents_style.insert("target".into(), Value::String("alias".into()));
-        let mut part_of_style = Mapping::new();
-        part_of_style.insert("target".into(), Value::String("id".into()));
-        let mut contents = Mapping::new();
-        contents.insert("style".into(), Value::Mapping(contents_style));
-        let mut part_of = Mapping::new();
-        part_of.insert("style".into(), Value::Mapping(part_of_style));
-        let mut relations = Mapping::new();
-        relations.insert("contents".into(), Value::Mapping(contents));
-        relations.insert("part_of".into(), Value::Mapping(part_of));
-        doc.insert("relations".into(), Value::Mapping(relations));
-        cfg.apply(&Value::Mapping(doc));
+        cfg.apply(&config_doc_nested(
+            &[("target", "id")],
+            &[
+                ("contents", &[("notation", "wikilink"), ("target", "alias")]),
+                ("part_of", &[("target", "id")]),
+            ],
+        ));
 
         let styles = cfg.resolved_relation_styles();
         let down = styles.get("contents").expect("contents style");
-        assert_eq!(down.wrapper, Wrapper::Wikilink);
+        assert_eq!(down.wrapper, crate::link::Wrapper::Wikilink);
         assert_eq!(down.addressing, Addressing::Alias);
 
         let up = styles.get("part_of").expect("part_of style");
-        // Inherits the default wrapper (markdown), keeps its own id target.
-        assert_eq!(up.wrapper, Wrapper::Markdown);
+        // Inherits the default notation (markdown), keeps its own id target.
+        assert_eq!(up.wrapper, crate::link::Wrapper::Markdown);
         assert_eq!(up.addressing, Addressing::Id);
     }
 
+    /// Build a config value with a top-level `references` block and a `relations`
+    /// block of per-relation overrides.
+    fn config_doc_nested(references: &[(&str, &str)], relations: &[(&str, &[(&str, &str)])]) -> Value {
+        let mut top = Mapping::new();
+        let mut refs = Mapping::new();
+        for (k, v) in references {
+            refs.insert((*k).into(), Value::String((*v).into()));
+        }
+        top.insert("references".into(), Value::Mapping(refs));
+        let mut rels = Mapping::new();
+        for (name, axes) in relations {
+            let mut spec = Mapping::new();
+            for (k, v) in *axes {
+                spec.insert((*k).into(), Value::String((*v).into()));
+            }
+            rels.insert((*name).into(), Value::Mapping(spec));
+        }
+        top.insert("relations".into(), Value::Mapping(rels));
+        Value::Mapping(top)
+    }
+
     #[test]
-    fn reference_style_composes_overrides_over_legacy_inputs() {
-        // No reference_* keys: derives from link_format + id_links (back-compat).
-        let legacy = WorkspaceConfig { id_links: true, ..WorkspaceConfig::default() };
-        let s = legacy.reference_style();
-        assert_eq!(s.wrapper, Wrapper::Markdown);
-        assert_eq!(s.addressing, Addressing::Id);
-        assert!(!s.label);
-
-        // Explicit wikilink + alias overrides, read from a config document.
+    fn reference_axes_orthogonalize_notation_and_resolution() {
+        // bare + canonical renders a plain workspace-relative path; wikilink wraps.
         let mut cfg = WorkspaceConfig::default();
-        let mut doc = Mapping::new();
-        doc.insert("reference_wrapper".into(), Value::String("wikilink".into()));
-        doc.insert("reference_target".into(), Value::String("id".into()));
-        doc.insert("reference_label".into(), Value::Bool(true));
-        cfg.apply(&Value::Mapping(doc));
-        let s = cfg.reference_style();
-        assert_eq!(s.wrapper, Wrapper::Wikilink);
-        assert_eq!(s.addressing, Addressing::Id);
-        assert!(s.label);
-
-        // markdown + alias is normalized to wikilink + alias.
-        let mut cfg = WorkspaceConfig::default();
-        cfg.reference_target = Some(Addressing::Alias);
-        assert_eq!(cfg.reference_style().wrapper, Wrapper::Wikilink);
+        let mut refs = Mapping::new();
+        refs.insert("notation".into(), Value::String("bare".into()));
+        refs.insert("path_style".into(), Value::String("canonical".into()));
+        let mut top = Mapping::new();
+        top.insert("references".into(), Value::Mapping(refs));
+        cfg.apply(&Value::Mapping(top));
+        assert_eq!(cfg.link_format(), LinkStyle::PlainCanonical);
+        assert_eq!(cfg.notation, Notation::Bare);
+        assert_eq!(cfg.path_style, PathStyle::Canonical);
     }
 
     #[test]
     fn apply_overlays_only_present_keys_so_the_config_document_wins() {
-        // Default: markdown_root + lazy.
         let mut config = WorkspaceConfig::default();
-
-        // Root frontmatter sets only link_format (diaryx compat).
-        let mut root = Mapping::new();
-        root.insert("link_format".into(), Value::String("plain_canonical".into()));
-        config.apply(&Value::Mapping(root));
-        assert_eq!(config.link_format, LinkStyle::PlainCanonical);
+        // Root block sets only content_format.
+        config.apply(&config_doc(&[("content_format", "djot")]));
+        assert_eq!(config.content_format, ContentFormat::Djot);
         assert_eq!(config.identity, Registration::LAZY, "identity untouched");
-
-        // The config document then overrides identity, link_format preserved.
-        let mut doc = Mapping::new();
-        doc.insert("identity".into(), Value::String("off".into()));
-        config.apply(&Value::Mapping(doc));
+        // The config document then overrides identity; content_format preserved.
+        config.apply(&config_doc(&[("identity", "none")]));
         assert_eq!(config.identity, Registration::OFF);
-        assert_eq!(config.link_format, LinkStyle::PlainCanonical);
+        assert_eq!(config.content_format, ContentFormat::Djot);
+    }
+
+    #[test]
+    fn diagnose_is_silent_on_a_clean_config_and_on_user_fields() {
+        let doc = config_doc(&[
+            ("title", "colophon config"),
+            ("part_of", "index.md"),
+            ("id", "abc123"),
+            ("spec", "1"),
+            ("identity", "lazy"),
+            ("fixity", "all"),
+            ("recycle_bin", "false"),
+            ("content_format", "djot"),
+            ("id_storage", "both"),
+            ("author", "someone"),
+        ]);
+        assert!(diagnose(&doc).is_empty(), "flagged: {:?}", diagnose(&doc));
+    }
+
+    #[test]
+    fn diagnose_flags_a_misspelled_top_level_key_with_a_suggestion() {
+        let issues = diagnose(&config_doc(&[("recyle_bin", "false")]));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, ConfigIssueKind::UnknownKey { suggestion: "recycle_bin".into() });
+    }
+
+    #[test]
+    fn diagnose_flags_bad_values_and_typos_inside_nested_blocks() {
+        // references.notaton (typo) + references.target bad value.
+        let mut refs = Mapping::new();
+        refs.insert("notaton".into(), Value::String("markdown".into()));
+        refs.insert("target".into(), Value::String("pointer".into()));
+        let mut top = Mapping::new();
+        top.insert("references".into(), Value::Mapping(refs));
+        let issues = diagnose(&Value::Mapping(top));
+        assert!(
+            issues.iter().any(|i| i.key == "references.notaton"
+                && matches!(&i.kind, ConfigIssueKind::UnknownKey { suggestion } if suggestion == "references.notation")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.key == "references.target"
+                && matches!(&i.kind, ConfigIssueKind::InvalidValue { value, .. } if value == "pointer")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn diagnose_flags_an_unrecognized_value_on_a_real_key() {
+        let issues = diagnose(&config_doc(&[("fixity", "alll")]));
+        assert_eq!(issues.len(), 1);
+        match &issues[0].kind {
+            ConfigIssueKind::InvalidValue { value, expected } => {
+                assert_eq!(value, "alll");
+                assert!(expected.contains(&"all".to_string()), "{expected:?}");
+            }
+            other => panic!("expected InvalidValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spec_ahead_fires_only_for_a_newer_spec() {
+        assert_eq!(spec_ahead(&config_doc(&[("identity", "lazy")])), None, "absent spec");
+        let at = {
+            let mut m = Mapping::new();
+            m.insert("spec".into(), Value::Int(SPEC_VERSION));
+            Value::Mapping(m)
+        };
+        assert_eq!(spec_ahead(&at), None, "current spec is fine");
+        let ahead = {
+            let mut m = Mapping::new();
+            m.insert("spec".into(), Value::Int(SPEC_VERSION + 1));
+            Value::Mapping(m)
+        };
+        assert_eq!(spec_ahead(&ahead), Some(SPEC_VERSION + 1));
+    }
+
+    #[test]
+    fn serialized_defaults_and_presets_all_pass_diagnosis() {
+        for config in
+            [WorkspaceConfig::default(), WorkspaceConfig::paths_only(), WorkspaceConfig::stable_ids()]
+        {
+            let serialized = Value::Mapping(config.to_mapping());
+            assert!(diagnose(&serialized).is_empty(), "flagged itself: {:?}", diagnose(&serialized));
+        }
     }
 }

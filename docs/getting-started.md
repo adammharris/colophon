@@ -101,7 +101,7 @@ $ colophon init my-vault
 │
 └  initialized /home/you/my-vault
    root: index.md — My Vault
-   config: colophon.yaml — content markdown, embed delimited (character delimiters), language yaml, link style markdown_root, identity lazy, links path
+   config: colophon.yaml — content markdown, embed delimited (character delimiters), language yaml, identity lazy, references path, markdown notation, root paths, id storage both, recycle bin, fixity attachments
    next: colophon new <path> --parent index.md
 ```
 
@@ -139,7 +139,7 @@ take all defaults, or set some and be prompted for the rest:
 $ colophon init my-vault --content djot --identity lazy --links id --yes
 initialized /home/you/my-vault
   root: index.dj — My Vault
-  config: colophon.yaml — content djot, embed code_block (typed code block), language yaml, link style markdown_root, identity lazy, links id
+  config: colophon.yaml — content djot, embed code_block (typed code block), language yaml, identity lazy, references id, id storage both, recycle bin, fixity attachments
 next: colophon new <path> --parent index.dj
 ```
 
@@ -345,15 +345,16 @@ owns your links" trick, except the identity data is a plain file in your own tre
 
 Two independent settings control this (§10):
 
-- **`identity`** — *when* a document earns a stable ID: `off` (never), `lazy`
+- **`identity`** — *when* a document earns a stable ID: `none` (never), `lazy`
   (on a link-by-id or publish — the recommended default), or `eager` (every
   document at creation).
-- **`id_links`** — *whether colophon authors structural links by ID* rather than
-  by path. Only meaningful when `identity` isn't off; with it on, a move rewrites
-  no links at all (the registry tracks the new path). The `init` **Links between
-  documents** prompt sets this.
+- **`references.target`** — *what a reference addresses*: `path`, `id`, or
+  `alias`. Set it to `id` and colophon authors structural links *by ID*, so a
+  move rewrites no links at all (the registry tracks the new path). Only
+  meaningful when `identity` isn't `none`. The `init` **Links between documents**
+  prompt sets this.
 
-Even with `id_links` off, `lazy` identity means you can mint an ID on demand and
+Even with `references.target: path`, `lazy` identity means you can mint an ID on demand and
 paste a durable reference by hand. Turn identity on at `init` (`--identity lazy`,
 optionally `--links id`), or later with `colophon config identity lazy`:
 
@@ -386,35 +387,72 @@ With `identity: off`, `colophon id` politely refuses — there is nothing to min
 Settings live in a config document linked from the root via the `config`
 relation — same reachability move as the registry. `init` writes this document
 (`colophon.yaml`) with the preferences you chose; afterwards `colophon config`
-reads and writes it.
+reads and writes it. Keys are grouped into a small nested vocabulary
+(`docs/config-vocab.md`); a policy setting can also live in the root's
+`colophon:` frontmatter block. `colophon check` flags any key colophon would
+silently ignore (a typo, or an unrecognized value).
 
 ```console
-$ colophon config                 # print the effective settings
-link_format: markdown_root
-identity: lazy
-id_links: false
-embed_format: yaml
+$ colophon config                        # print the effective settings
+spec: 1
 content_format: markdown
+metadata:
+  format: yaml
+  embed: delimited
+references:
+  notation: markdown
+  path_style: root
+  target: path
+  label: false
+id_storage: both
+updated: ''
+identity: lazy
+fixity: attachments
+recycle_bin: true
 
-$ colophon config id_links true   # change one setting
-set id_links = true in colophon.yaml
+$ colophon config references.target id   # change one nested setting (dotted key)
+set references.target = id in colophon.yaml
 ```
 
-The knobs:
+The knobs (dotted keys address nested axes):
 
-| Key             | Values                                                       | Meaning                                              |
-| --------------- | ------------------------------------------------------------ | ---------------------------------------------------- |
-| `link_format`   | `markdown_root`, `markdown_relative`, `plain_relative`, `plain_canonical` | how colophon writes path links     |
-| `identity`      | `off`, `lazy`, `eager`                                        | when a document earns a stable ID                    |
-| `id_links`      | `true`/`false`                                               | author structural links *by ID* instead of by path   |
-| `embed_format`  | `yaml`, `json`, `toml`, `fig`                                 | config language for newly created documents          |
-| `embed_type`    | `delimited`, `code_block`, `html_script`, `html_code`, `separate` | how that config language is embedded — delimiters, a fenced block, an HTML island, or a sidecar |
-| `content_format`| `markdown`, `djot`, `html`                                   | the body grammar the workspace is authored in        |
+| Key                       | Values                                                          | Meaning                                          |
+| ------------------------- | -------------------------------------------------------------- | ------------------------------------------------ |
+| `references.notation`     | `markdown`, `wikilink`, `bare`                                 | the syntactic form links are written in          |
+| `references.path_style`   | `root`, `relative`, `canonical`                                | how a *path* target is resolved                  |
+| `references.target`       | `path`, `id`, `alias`                                           | what a reference addresses                        |
+| `references.label`        | `true`/`false`                                                 | whether an id/alias link carries a `\|Title`      |
+| `identity`                | `none`, `lazy`, `eager`                                         | when a document earns a stable ID                |
+| `id_storage`              | `registry`, `frontmatter`, `both`                              | where a stable ID lives                          |
+| `metadata.format`         | `yaml`, `json`, `toml`, `fig`                                  | config language for newly created documents      |
+| `metadata.embed`          | `delimited`, `code_block`, `html_script`, `html_code`, `separate` | how that config language is embedded          |
+| `content_format`          | `markdown`, `djot`, `html`                                     | the body grammar the workspace is authored in    |
+| `fixity`                  | `off`, `attachments`, `all`                                    | how far content-checksum coverage extends        |
+| `recycle_bin`             | `true`/`false`                                                 | route a delete to the recoverable bin            |
+| `updated`                 | *a field name*                                                 | the machine-maintained "last updated" field      |
 
-The two `init` identity prompts map straight onto these keys: **Identity** sets
-`identity`, and **Links between documents** sets `id_links` (`path` → `false`,
-`id` → `true`). With `identity: lazy` + `id_links: true`, structural links are by
-ID and a move rewrites nothing — the registry does the work.
+The two `init` identity prompts map onto these keys: **Identity** sets
+`identity`, and **Links between documents** sets `references.target` (`path`, or
+`id` for move-stable links). With `identity: lazy` + `references.target: id`,
+structural links are by ID and a move rewrites nothing — the registry does the work.
+
+**Making config explicit.** Every key has a default, so a workspace with a
+minimal (or no) config document still runs — it just relies on those defaults. If
+you would rather see and edit every setting, `colophon config --setup` writes the
+full effective config into `colophon.yaml` (creating and linking it if needed),
+filling in the keys you have not set while preserving the ones you have:
+
+```console
+$ colophon config --setup
+wrote 9 explicit setting(s) to colophon.yaml
+```
+
+**Config that won't take effect.** colophon reads config back by exact key and
+value, so a misspelled key or an unrecognized value is silently ignored (the
+default stands). `colophon check` reports each one; and any command that opens the
+workspace prints a one-line reminder if your config has such a setting — or a
+`spec` newer than your colophon understands. Set `COLOPHON_QUIET=1` to silence
+these reminders.
 
 ---
 
@@ -448,9 +486,9 @@ colophon is young ("works for simple workspaces"). Things a beginner will hit:
   the root* by following `contents`. A `.md` file you never link into the tree
   is invisible to `tree` and `check`. Always attach new documents with `new`
   (or a hand-written `part_of`).
-- **`mv` doesn't yet honor `link_format`.** A move currently rewrites the
-  parent's link as a *relative* path even when your `link_format` is
-  `markdown_root`. The link still resolves; only its style changes. (`new` and
+- **`mv` doesn't yet honor the reference style.** A move currently rewrites the
+  parent's link as a *relative* path even when your `references.path_style` is
+  `root`. The link still resolves; only its style changes. (`new` and
   `check --fix` do respect the style.)
 - **The root must be unambiguous.** If a directory has two `.md` files with
   metadata and no `part_of`, colophon can't tell which is the root and reports

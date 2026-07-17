@@ -18,7 +18,8 @@ use colophon::document::MetaCarrier;
 use colophon::tree::{Node, NodeKind};
 use colophon::{
     Addressing, Adoption, ChangeSet, ContentFormat, Document, EmbedStyle, FileIndex, Format, Id,
-    IdStorage, IndexStore, Layout, LinkStyle, Mapping, Minter, Registration, RelationSet,
+    IdStorage, IndexStore, Layout, LinkStyle, Mapping, Minter, Notation, PathStyle, Registration,
+    RelationSet,
     RelationStyleConfig, RoutePlan, StdFs, StructurePlan, SynthNode, Target, Trigger, Value,
     Workspace, WorkspaceConfig, Wrapper, block_on, edit, link, meta,
 };
@@ -483,10 +484,17 @@ enum Command {
     /// `colophon.yaml` from the root on first use. With a key only, prints that
     /// value; with no key, prints the effective config.
     Config {
-        /// The config key (e.g. `link_format`, `identity`). Omit to print all.
+        /// The config key — dotted for nested axes (e.g. `references.notation`,
+        /// `identity`). Omit to print the effective config.
         key: Option<String>,
         /// The value to set. Omit to read.
         value: Option<String>,
+        /// Materialize the *full* effective config explicitly into the config
+        /// document — every setting written out at its current (or default)
+        /// value, so nothing relies on invisible defaults. Fills in the keys you
+        /// have not set; existing settings and fields are preserved.
+        #[arg(long, conflicts_with_all = ["key", "value"])]
+        setup: bool,
     },
 }
 
@@ -789,16 +797,6 @@ enum WrapperArg {
     Wikilink,
 }
 
-impl WrapperArg {
-    /// The lowercase spelling for the `init` summary line.
-    fn label(self) -> &'static str {
-        match self {
-            WrapperArg::Markdown => "markdown",
-            WrapperArg::Wikilink => "wikilink",
-        }
-    }
-}
-
 impl From<WrapperArg> for Wrapper {
     fn from(w: WrapperArg) -> Self {
         match w {
@@ -857,44 +855,40 @@ impl ReferenceArg {
         }
     }
 
-    /// Write the workspace-default reference axes and per-relation overrides this
-    /// (wrapper, addressing) pair encodes onto `config`. Leaving an axis `None`
-    /// preserves the pre-existing derive, so markdown + `Path` writes no new keys
-    /// (identical to the pre-reference-style behavior).
-    fn write_onto(self, wrapper: Wrapper, config: &mut WorkspaceConfig) {
-        // Record the wrapper only when it departs from the markdown default, so a
-        // plain markdown workspace keeps a minimal config.
-        let wrapper_key = (wrapper == Wrapper::Wikilink).then_some(Wrapper::Wikilink);
+    /// Write the addressing axis and per-relation overrides this reference choice
+    /// encodes onto `config`. The workspace `notation`/`path_style` are already set
+    /// (from the wrapper + path-format prompts); this only touches `target`,
+    /// `label`, and the split relations — except `alias`, which forces wikilink.
+    fn write_onto(self, config: &mut WorkspaceConfig) {
         // Author id links *labeled* — `[Title](id:…)` for markdown, `[[id:…|Title]]`
         // for wikilink — so a durable reference stays readable, and clickable with
         // graceful degradation (an `id:` scheme link resolves in tools that know it,
         // and says "unsupported scheme" in those that don't), rather than an opaque
         // bare id. The label is a maintained cache of the target's title.
-        let id_label = Some(true);
+        let id_label = true;
         match self {
-            ReferenceArg::Path => {
-                config.reference_wrapper = wrapper_key;
-            }
+            // Path addressing is the default; notation/path_style already carry it.
+            ReferenceArg::Path => {}
             ReferenceArg::Id => {
-                config.reference_wrapper = wrapper_key;
-                config.reference_target = Some(Addressing::Id);
+                config.reference_target = Addressing::Id;
                 config.reference_label = id_label;
             }
             ReferenceArg::Alias => {
-                // Alias has no markdown spelling; it always normalizes to wikilink.
-                config.reference_wrapper = Some(Wrapper::Wikilink);
-                config.reference_target = Some(Addressing::Alias);
+                // Alias has no markdown/bare spelling; it always renders wikilink.
+                config.notation = Notation::Wikilink;
+                config.reference_target = Addressing::Alias;
             }
             // Durable id by default (overlay relations like `links` stay
             // move-stable), then the two spanning directions diverge: a readable
-            // alias going down, an id link going up in the chosen wrapper.
+            // alias going down, an id link going up in the workspace notation.
             ReferenceArg::Split => {
-                config.reference_wrapper = wrapper_key;
-                config.reference_target = Some(Addressing::Id);
+                config.reference_target = Addressing::Id;
+                config.reference_label = id_label;
                 config.relation_styles.insert(
                     "contents".into(),
                     RelationStyleConfig {
-                        wrapper: Some(Wrapper::Wikilink),
+                        notation: Some(Notation::Wikilink),
+                        path_style: None,
                         target: Some(Addressing::Alias),
                         label: None,
                     },
@@ -902,9 +896,10 @@ impl ReferenceArg {
                 config.relation_styles.insert(
                     "part_of".into(),
                     RelationStyleConfig {
-                        wrapper: Some(wrapper),
+                        notation: None, // inherit the workspace notation
+                        path_style: None,
                         target: Some(Addressing::Id),
-                        label: id_label,
+                        label: Some(id_label),
                     },
                 );
             }
@@ -1047,7 +1042,9 @@ fn main() -> ExitCode {
         Command::Id { file } => resolve_target(&file).and_then(|f| cmd_id(&f)),
         Command::Resolve { id } => cmd_resolve(&id),
         Command::Backlinks { file } => resolve_target(&file).and_then(|f| cmd_backlinks(&f)),
-        Command::Config { key, value } => cmd_config(key.as_deref(), value.as_deref()),
+        Command::Config { key, value, setup } => {
+            cmd_config(key.as_deref(), value.as_deref(), setup)
+        }
     };
     match result {
         Ok(code) => code,
@@ -1082,11 +1079,66 @@ struct Ctx {
 
 type AnyError = Box<dyn std::error::Error>;
 
+/// Resolve the workspace root and, on success, warn (once, to stderr) about any
+/// config a command would otherwise run past silently — settings colophon would
+/// ignore, or a config `spec` newer than this build. Suppressed by
+/// `COLOPHON_QUIET`. Commands that already report config in full
+/// (`check`, `config`) use [`find_root_quiet`] instead.
+fn find_root() -> Result<Ctx, AnyError> {
+    let ctx = find_root_quiet()?;
+    warn_config(&ctx);
+    Ok(ctx)
+}
+
+/// Warn about config that will not take effect — the proactive counterpart to
+/// `check`'s [`colophon::Finding::ConfigIssue`]. One stderr line summarizing
+/// settings colophon would silently ignore (a typo or unrecognized value across
+/// either config surface), and one for a `spec` this build is too old to fully
+/// read. Quiet when the config is clean, or when `COLOPHON_QUIET` is set.
+fn warn_config(ctx: &Ctx) {
+    if std::env::var_os("COLOPHON_QUIET").is_some() {
+        return;
+    }
+    let mut issues = Vec::new();
+    let mut spec_ahead = None;
+    // The root's `colophon:` block.
+    if let Ok(text) = std::fs::read_to_string(ctx.root_dir.join(&ctx.root_doc))
+        && let Ok(doc) = Document::parse(&ctx.root_doc, &text)
+        && let Some(block) = doc.meta.get(colophon::config::ROOT_CONFIG_KEY)
+    {
+        issues.extend(colophon::diagnose(block));
+        spec_ahead = spec_ahead.or_else(|| colophon::spec_ahead(block));
+    }
+    // The dedicated config document.
+    let probe: Workspace<StdFs> = Workspace::builder(StdFs).root(&ctx.root_dir).build();
+    if let Ok(Some(config_doc)) = block_on(probe.config_path(&ctx.root_doc))
+        && let Ok(text) = std::fs::read_to_string(ctx.root_dir.join(&config_doc))
+        && let Ok(doc) = Document::parse(&config_doc, &text)
+    {
+        issues.extend(colophon::diagnose(&doc.meta));
+        spec_ahead = spec_ahead.or_else(|| colophon::spec_ahead(&doc.meta));
+    }
+    if let Some(declared) = spec_ahead {
+        eprintln!(
+            "colophon: config declares spec {declared} but this build understands spec {} — newer settings may be ignored (upgrade colophon)",
+            colophon::config::SPEC_VERSION
+        );
+    }
+    if let Some(first) = issues.first() {
+        eprintln!(
+            "colophon: {} config setting(s) will be ignored (e.g. `{}`) — run `colophon check` for details",
+            issues.len(),
+            first.key
+        );
+    }
+}
+
 /// Find the workspace root by walking up from the current directory: in each
 /// directory, a candidate root is a document (any content grammar — see
 /// [`ROOT_EXTS`]) with metadata and no `part_of` (nothing contains it). A file
-/// stemmed `index`, then `readme`, wins ties.
-fn find_root() -> Result<Ctx, AnyError> {
+/// stemmed `index`, then `readme`, wins ties. Does not warn about config — see
+/// [`find_root`].
+fn find_root_quiet() -> Result<Ctx, AnyError> {
     let cwd = std::env::current_dir()?;
     for dir in cwd.ancestors() {
         let mut candidates: Vec<String> = Vec::new();
@@ -1149,14 +1201,17 @@ fn find_root() -> Result<Ctx, AnyError> {
                 // Ask the root where its registry lives (the pointer relation).
                 let probe: Workspace<StdFs> = Workspace::builder(StdFs).root(&root_dir).build();
                 let registry = block_on(probe.registry_path(&root_doc))?;
-                // Build the effective config: defaults, overlaid by the root
-                // frontmatter (diaryx compat, e.g. `link_format`), overlaid by
-                // the linked config document (which wins).
+                // Build the effective config: defaults, overlaid by the root's
+                // `colophon:` frontmatter block (the description home), overlaid by
+                // the linked config document (which wins). Config keys sitting at
+                // the root's *top level* are not read — they are ordinary user
+                // fields now (`docs/config-vocab.md`).
                 let mut config = WorkspaceConfig::default();
                 if let Some(text) = std::fs::read_to_string(root_dir.join(&root_doc)).ok()
                     && let Ok(doc) = Document::parse(&root_doc, &text)
+                    && let Some(block) = doc.meta.get(colophon::config::ROOT_CONFIG_KEY)
                 {
-                    config.apply(&doc.meta);
+                    config.apply(block);
                 }
                 if let Ok(Some(config_doc)) = block_on(probe.config_path(&root_doc))
                     && let Some(text) = std::fs::read_to_string(root_dir.join(&config_doc)).ok()
@@ -1184,7 +1239,11 @@ fn find_root() -> Result<Ctx, AnyError> {
     }
     Err(
         "no workspace root found: no ancestor directory has a .md document \
-with metadata and no part_of"
+with metadata and no part_of\n\
+\n\
+  If this directory holds content already, run `colophon init` here to adopt it\n\
+  (use `colophon init --adopt` to link existing files in non-interactively).\n\
+  Otherwise `colophon init` starts a fresh workspace."
             .into(),
     )
 }
@@ -1228,8 +1287,9 @@ fn workspace(ctx: &Ctx) -> Result<Workspace<StdFs, Minter, FileIndex>, AnyError>
         .relations(relations)
         .identity(Minter::with(ctx.config.identity, entropy_seed()))
         .index(index)
-        .link_style(ctx.config.link_format)
-        .id_links(ctx.config.id_links)
+        .link_style(ctx.config.link_format())
+        // `reference_style` is explicit here, so it supersedes the builder's
+        // `id_links` fallback entirely — the CLI never sets that legacy axis.
         .reference_style(ctx.config.reference_style())
         .default_embed_format(ctx.config.default_embed_format)
         .fixity(ctx.config.fixity)
@@ -2320,16 +2380,16 @@ fn cmd_init(
     let recycle_bin = !no_recycle_bin;
     let updated_field = updated_field.unwrap_or_default();
 
-    // Assemble the workspace preferences these choices encode. The (wrapper,
-    // reference) pair writes the default `reference_*` axes and any per-relation
-    // overrides (the up≠down split) onto the config.
+    // Assemble the workspace preferences these choices encode. The wrapper +
+    // path-format prompts fix the notation/path_style axes; `write_onto` then
+    // layers the reference addressing and any per-relation split.
+    let link_ls: LinkStyle = link_style.into();
     let mut ws_config = WorkspaceConfig {
-        link_format: link_style.into(),
         identity: identity.registration(),
-        id_links: false,
-        reference_wrapper: None,
-        reference_target: None,
-        reference_label: None,
+        notation: Notation::from_wrapper(wrapper.into(), link_ls),
+        path_style: link_ls.axes().1,
+        reference_target: Addressing::Path,
+        reference_label: false,
         relation_styles: std::collections::BTreeMap::new(),
         id_storage: id_storage.into(),
         default_embed_format: meta.into(),
@@ -2337,9 +2397,9 @@ fn cmd_init(
         content_format: content.into(),
         recycle_bin,
         fixity: fixity.into(),
-        updated_field: updated_field.clone(),
+        updated: updated_field.clone(),
     };
-    reference.write_onto(wrapper.into(), &mut ws_config);
+    reference.write_onto(&mut ws_config);
 
     let meta_format: Format = meta.into();
     let config_name = sidecar_name(CONFIG_STEM, meta_format);
@@ -2406,7 +2466,7 @@ fn cmd_init(
     // §6/§7), the same shape as the registry.
     let config_rel = PathBuf::from(&config_name);
     let part_of = link::format_link(
-        ws_config.link_format,
+        ws_config.link_format(),
         &config_rel,
         Path::new(&root_name),
         &title,
@@ -2579,7 +2639,11 @@ fn cmd_init(
     // The path format only appears when a by-path reference is authored — it is
     // inert otherwise.
     let path_note = if reference.uses_path() {
-        format!(", path format {}", ws_config.link_format.as_config_str())
+        format!(
+            ", {} notation, {} paths",
+            ws_config.notation.as_config_str(),
+            ws_config.path_style.as_config_str()
+        )
     } else {
         String::new()
     };
@@ -2604,13 +2668,12 @@ fn cmd_init(
     };
     let details = format!(
         "root: {root_name} — {title}{author_note}\n\
-         config: {config_name} — content {}, embed {} ({}), language {}, identity {}, wrapper {}, references {}{path_note}{id_storage_note}{recycle_note}{fixity_note}{updated_note}",
+         config: {config_name} — content {}, embed {} ({}), language {}, identity {}, references {}{path_note}{id_storage_note}{recycle_note}{fixity_note}{updated_note}",
         content.label(),
         embed.as_config_str(),
         embed_label.to_lowercase(),
         meta.label(),
         identity.label(),
-        wrapper.label(),
         reference.label(),
     );
     let next = format!("next: colophon new <title> --in-path {root_name}");
@@ -2941,15 +3004,15 @@ fn cmd_edit(file: &Path) -> CmdResult {
     // no-op when neither is enabled.
     let mut ws = workspace(&ctx)?;
     let now = now_rfc3339();
-    let updated = (!ctx.config.updated_field.is_empty())
-        .then_some((ctx.config.updated_field.as_str(), now.as_str()));
+    let updated = (!ctx.config.updated.is_empty())
+        .then_some((ctx.config.updated.as_str(), now.as_str()));
     let wrote = block_on(ws.record_content_update(&rel, updated))?;
     persist(&ctx, &mut ws)?;
 
     match (wrote, updated.is_some()) {
-        (true, true) => println!("edited {} — stamped `{}` + checksum", rel.display(), ctx.config.updated_field),
+        (true, true) => println!("edited {} — stamped `{}` + checksum", rel.display(), ctx.config.updated),
         (true, false) => println!("edited {} — content checksum updated", rel.display()),
-        (false, true) => println!("edited {} — stamped `{}`", rel.display(), ctx.config.updated_field),
+        (false, true) => println!("edited {} — stamped `{}`", rel.display(), ctx.config.updated),
         _ => println!("edited {}", rel.display()),
     }
     Ok(ExitCode::SUCCESS)
@@ -3257,7 +3320,9 @@ fn edit_file(path: &Path) -> std::io::Result<()> {
 }
 
 fn cmd_check(root: Option<&Path>, fix: bool) -> CmdResult {
-    let mut ctx = find_root()?;
+    // `check` reports config issues in full (Finding::ConfigIssue), so skip the
+    // one-line find_root warning that would just duplicate them.
+    let mut ctx = find_root_quiet()?;
     // Heal first, validate second: if a mutation was interrupted by a crash, a
     // write-ahead journal is on disk. Roll it forward before reading the
     // workspace, so `check` reports on a consistent tree — and so the recovery
@@ -3781,24 +3846,35 @@ fn cmd_empty_bin() -> CmdResult {
 fn cmd_convert(file: &Path, axis: &str, value: &str, recursive: bool) -> CmdResult {
     let ctx = find_root()?;
     let mut ws = workspace(&ctx)?;
+    // Convert authors path links in a target [`LinkStyle`], which fuses the
+    // notation (bracketed/bare) and path resolution. Each axis composes with the
+    // workspace's current *other* axis; `wikilink` has no path rendering to
+    // convert, so it is rejected here.
     match axis {
-        "link_format" | "link-format" => {
-            let style = LinkStyle::from_config_str(value).ok_or_else(|| {
-                format!(
-                    "unknown link_format `{value}` \
-                     (expected markdown_root|markdown_relative|plain_relative|plain_canonical)"
-                )
+        "path_style" | "path-style" => {
+            let ps = PathStyle::from_config_str(value).ok_or_else(|| {
+                format!("unknown path_style `{value}` (expected root|relative|canonical)")
             })?;
+            let style = LinkStyle::from_axes(ctx.config.notation, ps);
             let n = block_on(ws.convert_link_style(&ws_rel(&ctx, file)?, style, recursive))?;
             persist(&ctx, &mut ws)?;
-            println!(
-                "converted {n} document(s) to {} link style",
-                style.as_config_str()
-            );
+            println!("converted {n} document(s) to {value} path resolution");
+        }
+        "notation" => {
+            let nt = Notation::from_config_str(value).ok_or_else(|| {
+                format!("unknown notation `{value}` (expected markdown|bare)")
+            })?;
+            if nt == Notation::Wikilink {
+                return Err("convert: `wikilink` has no path rendering to convert".into());
+            }
+            let style = LinkStyle::from_axes(nt, ctx.config.path_style);
+            let n = block_on(ws.convert_link_style(&ws_rel(&ctx, file)?, style, recursive))?;
+            persist(&ctx, &mut ws)?;
+            println!("converted {n} document(s) to {value} notation");
         }
         other => {
             return Err(format!(
-                "convert: axis `{other}` is not supported yet (only `link_format`)"
+                "convert: axis `{other}` is not supported (only `notation` and `path_style`)"
             )
             .into());
         }
@@ -3845,8 +3921,67 @@ fn cmd_id(file: &Path) -> CmdResult {
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_config(key: Option<&str>, value: Option<&str>) -> CmdResult {
-    let ctx = find_root()?;
+/// Look up a dotted key (`references.notation`) in a nested config mapping,
+/// descending one mapping per segment.
+fn lookup_dotted<'a>(map: &'a Mapping, dotted: &str) -> Option<&'a Value> {
+    let mut segments = dotted.split('.');
+    let mut current = map.get(segments.next()?)?;
+    for seg in segments {
+        current = current.get(seg)?;
+    }
+    Some(current)
+}
+
+/// Build the nested probe a dotted `config <key> <value>` implies, so `diagnose`
+/// validates `references.notation=wikilink` as the nested shape it understands
+/// rather than reading `references.notation` as one unknown top-level key.
+fn nest_probe(dotted: &str, value: Value) -> Value {
+    let mut node = value;
+    for key in dotted.rsplit('.') {
+        let mut m = Mapping::new();
+        m.insert(key.to_string(), node);
+        node = Value::Mapping(m);
+    }
+    node
+}
+
+/// Materialize the full effective config explicitly into the config document:
+/// every setting written at its current-or-default value, so a workspace never
+/// relies on invisible defaults. Bootstraps `colophon.yaml` if none is linked,
+/// preserves the document's own fields (title/part_of and any user fields) and
+/// every setting already present (those are already in the effective config),
+/// and fills in the rest. Canonicalizes layout (comments in the config document
+/// are not preserved).
+fn cmd_config_setup(mut ctx: Ctx) -> CmdResult {
+    let config_doc = ensure_config(&mut ctx)?;
+    let full = ctx.root_dir.join(&config_doc);
+    let text = std::fs::read_to_string(&full)?;
+    let doc = Document::parse(&config_doc, &text)?;
+    let policy = ctx.config.to_mapping();
+    // Keep the document's non-policy fields (title, part_of, user fields) in
+    // place, then write every effective policy key explicitly after them.
+    let mut map = Mapping::new();
+    if let Some(existing) = doc.meta.as_mapping() {
+        for (k, v) in existing {
+            if !policy.contains_key(k) {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let count = policy.len();
+    for (k, v) in policy {
+        map.insert(k, v);
+    }
+    std::fs::write(&full, meta::serialize_mapping(&map, ctx.config.default_embed_format)?)?;
+    println!("wrote {count} explicit setting(s) to {}", config_doc.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_config(key: Option<&str>, value: Option<&str>, setup: bool) -> CmdResult {
+    let ctx = find_root_quiet()?;
+    if setup {
+        return cmd_config_setup(ctx);
+    }
     match (key, value) {
         // No key: print the effective config (defaults + root + config document).
         (None, _) => {
@@ -3855,13 +3990,18 @@ fn cmd_config(key: Option<&str>, value: Option<&str>) -> CmdResult {
                 meta::serialize_mapping(&ctx.config.to_mapping(), Format::Yaml)?
             );
         }
-        // Key only: read that value from the linked config document.
+        // Key only: read that value from the *effective* config (defaults + root
+        // frontmatter + config document), so it agrees with the no-key form
+        // above. Reading the config document alone would report "not set" for a
+        // value that comes from root frontmatter (the diaryx-compat path) or
+        // stands at its default — a divergence between the two forms.
         (Some(key), None) => {
-            let ws = workspace(&ctx)?;
-            match block_on(ws.config_get(&ctx.root_doc, key))? {
+            let effective = ctx.config.to_mapping();
+            // Dotted keys address nested axes (`references.notation`).
+            match lookup_dotted(&effective, key) {
                 Some(v) => match v.as_str() {
                     Some(s) => println!("{s}"),
-                    None => println!("{}", meta::serialize_value(&v, Format::Yaml)?.trim_end()),
+                    None => println!("{}", meta::serialize_value(v, Format::Yaml)?.trim_end()),
                 },
                 None => {
                     eprintln!("colophon: {key} is not set");
@@ -3872,11 +4012,35 @@ fn cmd_config(key: Option<&str>, value: Option<&str>) -> CmdResult {
         // Key + value: materialize/link the config document if needed, then set.
         (Some(key), Some(value)) => {
             let mut ctx = ctx;
+            let inferred = edit::infer_scalar(value);
+            // Refuse to write a setting colophon would silently ignore — the same
+            // conditions `check` flags (a key that resembles a real axis but
+            // isn't, or a recognized axis with an unrecognized value). Running the
+            // shared diagnostic over a one-key probe keeps set-time and check-time
+            // judgments identical. A truly novel key (resembling no axis) is left
+            // to pass — it may be a user field or a forward-compatible key.
+            let probe = nest_probe(key, inferred.clone().into());
+            if let Some(issue) = colophon::diagnose(&probe).into_iter().next() {
+                match issue.kind {
+                    colophon::ConfigIssueKind::UnknownKey { suggestion } => {
+                        eprintln!(
+                            "colophon: unknown config key `{key}` — did you mean `{suggestion}`?"
+                        );
+                    }
+                    colophon::ConfigIssueKind::InvalidValue { value, expected } => {
+                        eprintln!(
+                            "colophon: `{value}` is not a valid {key} (expected: {})",
+                            expected.join(", ")
+                        );
+                    }
+                }
+                return Ok(ExitCode::FAILURE);
+            }
             let config_doc = ensure_config(&mut ctx)?;
             let full = ctx.root_dir.join(&config_doc);
             let text = std::fs::read_to_string(&full)?;
             let doc = Document::parse(&config_doc, &text)?;
-            let updated = edit::set_in_text(&text, doc.carrier, key, edit::infer_scalar(value))?;
+            let updated = edit::set_in_text(&text, doc.carrier, key, inferred)?;
             std::fs::write(&full, updated)?;
             println!("set {key} = {value} in {}", config_doc.display());
         }
@@ -3915,7 +4079,7 @@ fn ensure_config(ctx: &mut Ctx) -> Result<PathBuf, AnyError> {
             })
             .unwrap_or_else(|| colophon::path_to_title(&ctx.root_doc));
         let part_of = colophon::format_link(
-            ctx.config.link_format,
+            ctx.config.link_format(),
             &config_rel,
             &ctx.root_doc,
             &root_title,

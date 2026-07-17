@@ -159,3 +159,101 @@ fn a_route_subject_refuses_to_create_what_it_cannot_find() {
     );
     assert!(!dir.join("daily/2026/09").exists(), "and creates nothing");
 }
+
+// ── config vocabulary (docs/config-vocab.md) ────────────────────────────────
+
+/// A throwaway workspace initialized fresh in a temp dir.
+fn workspace(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("colophon-cfg-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out) = run(&dir, &["init", "--yes"]);
+    assert!(ok, "init: {out}");
+    dir
+}
+
+#[test]
+fn config_reads_and_writes_nested_axes_by_dotted_key() {
+    let dir = workspace("dotted");
+    let (ok, out) = run(&dir, &["config", "references.notation"]);
+    assert!(ok && out.trim() == "markdown", "get default: {out}");
+    let (ok, _) = run(&dir, &["config", "references.notation", "wikilink"]);
+    assert!(ok);
+    let (ok, out) = run(&dir, &["config", "references.notation"]);
+    assert!(ok && out.trim() == "wikilink", "get after set: {out}");
+}
+
+#[test]
+fn config_set_refuses_a_setting_check_would_ignore() {
+    let dir = workspace("refuse");
+    let (ok, out) = run(&dir, &["config", "fixity", "alll"]);
+    assert!(!ok, "a bad value must be refused: {out}");
+    assert!(out.contains("attachments"), "lists the accepted values: {out}");
+    let (ok, out) = run(&dir, &["config", "references.notaton", "bare"]);
+    assert!(!ok, "a typo'd nested key must be refused: {out}");
+    assert!(out.contains("references.notation"), "suggests the real key: {out}");
+}
+
+#[test]
+fn config_setup_materializes_the_full_effective_config() {
+    let dir = workspace("setup");
+    // A partial config with a user field and one non-default setting.
+    std::fs::write(
+        dir.join("colophon.yaml"),
+        "title: colophon config\npart_of: '[Setup](/index.md)'\nmaintainer: adam\nfixity: all\n",
+    )
+    .unwrap();
+    let (ok, out) = run(&dir, &["config", "--setup"]);
+    assert!(ok, "{out}");
+    let cfg = std::fs::read_to_string(dir.join("colophon.yaml")).unwrap();
+    assert!(cfg.contains("maintainer: adam"), "preserves a user field: {cfg}");
+    assert!(cfg.contains("fixity: all"), "preserves a non-default: {cfg}");
+    assert!(cfg.contains("notation: markdown"), "fills a reference default: {cfg}");
+    assert!(cfg.contains("identity: lazy"), "fills the identity default: {cfg}");
+}
+
+#[test]
+fn check_flags_a_typo_in_the_config_document() {
+    let dir = workspace("lint");
+    let mut cfg = std::fs::read_to_string(dir.join("colophon.yaml")).unwrap();
+    cfg.push_str("recyle_bin: false\n");
+    std::fs::write(dir.join("colophon.yaml"), cfg).unwrap();
+    let (ok, out) = run(&dir, &["check"]);
+    assert!(!ok, "check fails on a config issue: {out}");
+    assert!(out.contains("recycle_bin"), "suggests the real key: {out}");
+}
+
+#[test]
+fn check_reports_a_config_spec_newer_than_this_build() {
+    let dir = workspace("spec");
+    let mut cfg = std::fs::read_to_string(dir.join("colophon.yaml")).unwrap();
+    // The config document ships `spec: 1`; bump it past what this build knows.
+    let bumped = cfg.replace("spec: 1", "spec: 99");
+    assert_ne!(bumped, cfg, "fixture must carry a spec line");
+    cfg = bumped;
+    std::fs::write(dir.join("colophon.yaml"), cfg).unwrap();
+    let (ok, out) = run(&dir, &["check"]);
+    assert!(!ok, "check fails when spec is ahead: {out}");
+    assert!(out.contains("spec 99"), "names the declared spec: {out}");
+    assert!(out.contains("upgrade colophon"), "points at the resolution: {out}");
+}
+
+#[test]
+fn a_command_warns_about_config_that_will_be_ignored_unless_quiet() {
+    let dir = workspace("warn");
+    let mut cfg = std::fs::read_to_string(dir.join("colophon.yaml")).unwrap();
+    cfg.push_str("identis: lazy\n"); // near-miss of `identity` → a real typo
+    std::fs::write(dir.join("colophon.yaml"), cfg).unwrap();
+    let (ok, out) = run(&dir, &["tree"]);
+    assert!(ok, "tree still succeeds: {out}");
+    assert!(out.contains("will be ignored"), "warns proactively: {out}");
+    // COLOPHON_QUIET silences the reminder.
+    let quiet = Command::new(env!("CARGO_BIN_EXE_colophon"))
+        .current_dir(&dir)
+        .args(["tree"])
+        .env("COLOPHON_QUIET", "1")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&quiet.stderr);
+    assert!(!text.contains("will be ignored"), "COLOPHON_QUIET suppresses it: {text}");
+}

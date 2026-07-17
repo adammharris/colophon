@@ -5,14 +5,18 @@ link — is *spelled*. colophon exposes every option as configuration; a curated
 frontend (diaryx) picks one. This is the identity-vs-readability dial made
 explicit.
 
-## The two axes
+## The axes
 
-A reference style is a **wrapper** plus an **addressing** substyle, matching the
-"pick the wrapper first, then the substyle" model:
+A reference style is a **notation**, an **addressing** (`target`), an optional
+**label**, and — for path targets — a **path_style** (`docs/config-vocab.md`,
+`references:` block). Notation and path resolution are orthogonal: notation says
+*how the reference is delimited* (bracketed markdown, wikilink, or bare), path
+style says *how a path is resolved* (root / relative / canonical).
 
-| wrapper | addressing | written form | durable (move/rename-safe)? | readable raw? |
+| notation | addressing | written form | durable (move/rename-safe)? | readable raw? |
 |---|---|---|---|---|
-| `markdown` | `path` | `[Title](/notes/a.md)` (or bare, per `link_format`) | ❌ rewritten on move | ✅ |
+| `markdown` | `path` | `[Title](/notes/a.md)` (path per `path_style`) | ❌ rewritten on move | ✅ |
+| `bare` | `path` | `/notes/a.md` (path per `path_style`) | ❌ rewritten on move | ✅ |
 | `markdown` | `id` | `[Title](id:ajp7eq)` | ✅ | ✅ (title shown) |
 | `wikilink` | `id` (no label) | `[[id:ajp7eq]]` | ✅ | ❌ opaque id |
 | `wikilink` | `id` (label) | `[[id:ajp7eq\|Title]]` | ✅ | ✅ |
@@ -25,8 +29,9 @@ A reference style is a **wrapper** plus an **addressing** substyle, matching the
 - **`alias`** addresses by the target's title/name, resolved nominally through a
   title index. Readable, but not move/rename-safe, and it never registers. The
   weakest-but-prettiest option.
-- **`path`** is the classic diaryx form; `link_format` (`LinkStyle`) chooses the
-  path rendering (root / relative / plain).
+- **`path`** is the classic diaryx form; `path_style` chooses the rendering
+  (`root` = `/a.md`, `relative` = `../a.md`, `canonical` = `a.md`), and `notation`
+  chooses whether it is bracketed (`markdown`) or bare (`bare`).
 - The **label** on an `id` wikilink (`|Title`) is a *cached copy* of the target's
   title — cosmetic, refreshable. `check` can flag a stale one (`StaleLabel`,
   staged) and refresh it, turning "fallible cache" into "maintained cache."
@@ -36,8 +41,8 @@ still explicit and diagnosable, and — unlike a `colophon://` URL — it does n
 collide with `is_external`'s `://` check). `colophon:` is still recognized on
 read for backward compatibility.
 
-`alias` implies `wikilink` (markdown has no way to address by bare name), so a
-`markdown` + `alias` request is normalized to `wikilink` + `alias`.
+`alias` implies `wikilink` (neither `markdown` nor `bare` can address by bare
+name), so an `alias` request always renders as a wikilink.
 
 ## Up ≠ down: style is per-relation
 
@@ -49,14 +54,15 @@ side is authored in its own relation's style. On read the resolver is
 style-agnostic: it takes whatever it finds and resolves it.
 
 ```yaml
-# workspace default (root frontmatter / config document)
-reference_wrapper: wikilink
-reference_target: id
-reference_label: true
+# workspace default (root `colophon:` block / config document)
+references:
+  notation: wikilink
+  target: id
+  label: true
 
 relations:
-  contents: { style: { wrapper: wikilink, target: alias } }   # DOWN: reads like a TOC
-  part_of:  { style: { wrapper: markdown, target: id } }       # UP: durable bookkeeping
+  contents: { notation: wikilink, target: alias }   # DOWN: reads like a TOC
+  part_of:  { notation: markdown, target: id }       # UP: durable bookkeeping
 ```
 
 ### Consequences (chosen deliberately, not stumbled into)
@@ -97,24 +103,27 @@ looked up; paths and `id:` targets are never diverted.
 
 ## Implementation status
 
-- ✅ `ReferenceStyle` / `Wrapper` / `Addressing` types + renderer + parsing
-  (`link.rs`); `id:` scheme with legacy `colophon:` read.
+- ✅ `ReferenceStyle` renderer + parsing (`link.rs`); the config-facing
+  `Notation` (`markdown`/`wikilink`/`bare`) and `PathStyle`
+  (`root`/`relative`/`canonical`) axes compose to the internal `Wrapper` +
+  extended `LinkStyle` (the 2×3 cross-product); `id:` scheme with legacy
+  `colophon:` read.
 - ✅ Per-relation `style` on `Relation` (`relation.rs`).
 - ✅ Workspace default + config keys (`config.rs`), authoring seam
   (`authored_target`) resolves per-relation style.
 - ✅ `alias` **resolution** via the title index (`title.rs`), wired through
   `tree` and `check` (unique / ambiguous / unknown).
-- ✅ Per-relation styles declared in the config *document*: a `relations:
-  { <name>: { style: { wrapper, target, label } } }` block, each axis optional
+- ✅ Per-relation styles declared in a config surface: a `relations:
+  { <name>: { notation, path_style, target, label } }` block, each axis optional
   and overlaid on the workspace default (`RelationStyleConfig` +
   `WorkspaceConfig::resolved_relation_styles` in `config.rs`;
   `RelationSet::with_styles` in `relation.rs`; wired through the CLI's workspace
   builder).
 - ✅ `colophon init` surfaces the model *wrapper-first*: `--wrapper`
-  (markdown / wikilink) picks the syntactic axis, then `--reference` picks the
-  addressing (`path` / `id` / `alias` / `split` — the up≠down diaryx shape), and
-  `--link-style` formats a path target (asked only when the addressing is path).
-  The chosen pair writes the `reference_*` defaults and, for `split`, the
-  `relations` block. `id`/`split` are gated on `--identity` ≠ off.
+  (markdown / wikilink) and `--link-style` set the workspace `notation`/
+  `path_style`, then `--reference` picks the addressing (`path` / `id` / `alias`
+  / `split` — the up≠down diaryx shape). The choices write the `references`
+  defaults and, for `split`, the `relations` block. `id`/`split` are gated on
+  `--identity` ≠ none.
 - ⏳ **Staged:** `StaleLabel` finding + label refresh in `validate.rs`.
   Body-prose reference restyle during the `mutate` port.
