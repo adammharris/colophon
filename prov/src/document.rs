@@ -302,6 +302,31 @@ impl Document {
         })
     }
 
+    /// Zero-copy counterpart to [`parse`](Self::parse): locate a fenced
+    /// metadata block in `text` without parsing it, returning the
+    /// [`MetaCarrier`] found and the two slices it borrows from `text` —
+    /// `(meta_block, body)`. Mirrors `fig::detect`/`fig::split` composed into
+    /// one step, the same primitives `parse` builds its owned, parsed
+    /// [`Value`] from.
+    ///
+    /// Only recognizes a *fenced* carrier — a whole-file (config) document has
+    /// no split to offer, since its entire text already is the metadata; a
+    /// caller steering by path extension (as `parse` does via
+    /// [`whole_file_format`]) should check that first. Returns `None` when
+    /// `text` opens no known archetype, or its opening fence has no matching
+    /// close (an unterminated fence degrades to "no metadata", matching
+    /// `parse`).
+    ///
+    /// The caller who wants the parsed [`Value`] should use [`parse`](Self::parse)
+    /// instead; this exists for one who wants to defer parsing to their own
+    /// deserializer, or just needs the raw borrowed text (e.g. to detect which
+    /// archetype a document uses without allocating).
+    pub fn split(text: &str) -> Option<(MetaCarrier, &str, &str)> {
+        let kind = fig::detect(text)?;
+        let (meta, body) = fig::split(text, kind)?;
+        Some((MetaCarrier::Fenced(kind), meta, body))
+    }
+
     /// The document's path.
     pub fn path(&self) -> &Path {
         &self.path
@@ -510,6 +535,60 @@ mod tests {
         assert!(doc.meta.is_null());
         assert_eq!(doc.body, text);
         assert_eq!(doc.carrier, None);
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn split_borrows_yaml_frontmatter_and_body_without_parsing() {
+        let text = "---\ntitle: Root\n---\n# Body\n\nhello\n";
+        let (carrier, meta, body) = Document::split(text).unwrap();
+        assert_eq!(carrier, MetaCarrier::Fenced(EmbedType::FrontmatterYaml));
+        assert_eq!(meta, "title: Root\n");
+        assert_eq!(body, "# Body\n\nhello\n");
+        // Byte-identical to what `parse` extracts, just unparsed and borrowed.
+        let doc = Document::parse("x.md", text).unwrap();
+        assert_eq!(doc.body, body);
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn split_handles_crlf_line_endings() {
+        let text = "---\r\ntitle: Root\r\n---\r\nbody\r\n";
+        let (carrier, meta, body) = Document::split(text).unwrap();
+        assert_eq!(carrier, MetaCarrier::Fenced(EmbedType::FrontmatterYaml));
+        assert_eq!(meta, "title: Root\r\n");
+        assert_eq!(body, "body\r\n");
+    }
+
+    #[test]
+    fn split_is_none_with_no_frontmatter() {
+        assert_eq!(Document::split("# Just a note\n"), None);
+    }
+
+    #[test]
+    fn split_is_none_for_an_unterminated_fence() {
+        let text = "---\ntitle: oops\nno closing fence\n";
+        assert_eq!(Document::split(text), None);
+    }
+
+    #[cfg(feature = "fig-lang")]
+    #[test]
+    fn split_recognizes_a_non_yaml_carrier() {
+        let text = "```fig\ntitle = prov\n```\n# Body\n";
+        let (carrier, meta, body) = Document::split(text).unwrap();
+        assert_eq!(carrier, MetaCarrier::Fenced(EmbedType::FrontmatterFig));
+        assert_eq!(meta, "title = prov\n");
+        assert_eq!(body, "# Body\n");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn split_recognizes_json_frontmatter() {
+        let text = ";;;\n{\"title\": \"Root\"}\n;;;\nbody\n";
+        let (carrier, meta, body) = Document::split(text).unwrap();
+        assert_eq!(carrier, MetaCarrier::Fenced(EmbedType::FrontmatterJson));
+        assert_eq!(meta, "{\"title\": \"Root\"}\n");
+        assert_eq!(body, "body\n");
     }
 
     #[cfg(feature = "yaml")]

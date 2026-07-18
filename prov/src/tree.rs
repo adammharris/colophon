@@ -39,10 +39,33 @@ pub enum NodeKind {
     AmbiguousAlias(String),
 }
 
+/// Options controlling how [`Workspace::tree_with`] materializes a spanning
+/// target that does not resolve on disk.
+///
+/// The default (`tree()`'s behavior) materializes a [`NodeKind::Missing`]
+/// node for every such target, so a caller can report *which* link is broken.
+/// Some callers instead want the tree to look exactly as if the dead link were
+/// never declared — an editor's outline view, say, which has nothing useful to
+/// render for a node with no title, no children, and no file. `ignore_missing`
+/// is the additive escape hatch for that: it only ever *removes* nodes the
+/// default would have included, so a workspace with no broken links traverses
+/// identically either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TreeOptions {
+    /// When `true`, a spanning target that does not exist on disk is omitted
+    /// from its parent's `children` entirely, rather than becoming a
+    /// [`NodeKind::Missing`] node. Default: `false`.
+    pub ignore_missing: bool,
+}
+
 /// One node of the materialized spanning tree.
 #[derive(Debug, Clone)]
 pub struct Node {
-    /// Workspace-relative, normalized path.
+    /// Workspace-relative, normalized path — relative to [`Workspace::root`],
+    /// *not* fs-readable as-is. Join it onto the root with
+    /// [`Workspace::fs_path`] before handing it to a [`Storage`](crate::fs::Storage)
+    /// read; the raw form here is what makes a [`Node`] stable across a
+    /// workspace re-rooted to a different directory.
     pub path: PathBuf,
     /// The document's `title` field, when present.
     pub title: Option<String>,
@@ -62,6 +85,13 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     /// index, built once for the whole walk so spanning alias links (a
     /// `contents: alias` vocabulary) descend like any other.
     pub async fn tree(&self, start: impl AsRef<Path>) -> Result<Node> {
+        self.tree_with(start, TreeOptions::default()).await
+    }
+
+    /// Materialize the spanning tree rooted at `start`, as [`tree`](Self::tree),
+    /// with [`TreeOptions`] controlling how an unresolved spanning target is
+    /// represented. `TreeOptions::default()` is exactly `tree()`'s behavior.
+    pub async fn tree_with(&self, start: impl AsRef<Path>, options: TreeOptions) -> Result<Node> {
         let start = link::normalize(start);
         // The title index is built lazily — only if a nominal (`[[alias]]`) link
         // is actually encountered. A path/id workspace never needs it, so it never
@@ -70,7 +100,7 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
         let mut titles: Option<crate::title::TitleIndex> = None;
         let mut trail: Vec<PathBuf> = Vec::new();
         let root = start.clone();
-        self.tree_node(start, None, &root, &mut titles, &mut trail)
+        self.tree_node(start, None, &root, &mut titles, &mut trail, options)
             .await
     }
 
@@ -91,6 +121,21 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
         Ok((text, doc))
     }
 
+    /// Read and parse the workspace-relative document at `path`, returning its
+    /// full [`Document`] — the public counterpart to [`load`](Self::load), for
+    /// a caller walking a [`Node`] tree who needs more than [`Node::title`]
+    /// (the rest of the frontmatter, the body, the carrier) without re-reading
+    /// and re-parsing the file by hand.
+    ///
+    /// Unlike the traversal, which degrades a bad target to a
+    /// [`NodeKind::Unreadable`] node, this surfaces the [`Error`](crate::error::Error)
+    /// directly — a caller who names a path expects to know why it failed, not
+    /// to receive a placeholder.
+    pub async fn document(&self, path: impl AsRef<Path>) -> Result<Document> {
+        let path = link::normalize(path);
+        self.load(&path).await.map(|(_, doc)| doc)
+    }
+
     fn tree_node<'a>(
         &'a self,
         path: PathBuf,
@@ -98,6 +143,7 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
         root: &'a Path,
         titles: &'a mut Option<crate::title::TitleIndex>,
         trail: &'a mut Vec<PathBuf>,
+        options: TreeOptions,
     ) -> Pin<Box<dyn Future<Output = Result<Node>> + 'a>> {
         Box::pin(async move {
             if trail.contains(&path) {
@@ -181,10 +227,18 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                     }
                     Target::Path(p) => p,
                 };
-                children.push(
-                    self.tree_node(child_path, child.label, root, titles, trail)
-                        .await?,
-                );
+                let child_node = self
+                    .tree_node(child_path, child.label, root, titles, trail, options)
+                    .await?;
+                // `ignore_missing` only ever removes what the default would have
+                // included: a `Missing` child is dropped here rather than pushed,
+                // so a caller who asked for it sees no trace of the dead link at
+                // all, matching diaryx's traversal. Every other kind (including a
+                // deeper `Missing` several levels down, which surfaced as `Doc`
+                // with that descendant already filtered) is unaffected.
+                if !(options.ignore_missing && child_node.kind == NodeKind::Missing) {
+                    children.push(child_node);
+                }
                 // (titles carried by &mut, so a nominal link deeper in the tree
                 // reuses the index built above rather than rescanning.)
             }
@@ -290,5 +344,101 @@ mod tests {
         assert_eq!(b.kind, NodeKind::Doc);
         assert_eq!(b.children[0].kind, NodeKind::Cycle);
         assert_eq!(b.children[0].path, PathBuf::from("a.md"));
+    }
+
+    #[test]
+    fn default_tree_materializes_a_missing_node_for_a_broken_contents_link() {
+        // `tree()` and `tree_with(TreeOptions::default())` must agree exactly —
+        // the same fixture as `ignore_missing_drops_the_broken_link_entirely`
+        // below, pinned against the default (unchanged) behavior.
+        let dir = tempdir("missing-default");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- '[A](notes/a.md)'\n- gone.md\n---\n",
+        );
+        write(&dir, "notes/a.md", "---\ntitle: A\n---\n");
+
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let root = block_on(ws.tree("index.md")).unwrap();
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.children[1].kind, NodeKind::Missing);
+
+        let root = block_on(ws.tree_with("index.md", TreeOptions::default())).unwrap();
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.children[1].kind, NodeKind::Missing);
+    }
+
+    #[test]
+    fn ignore_missing_drops_the_broken_link_entirely() {
+        let dir = tempdir("missing-ignore");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- '[A](notes/a.md)'\n- gone.md\n---\n",
+        );
+        write(&dir, "notes/a.md", "---\ntitle: A\n---\n");
+
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let options = TreeOptions {
+            ignore_missing: true,
+        };
+        let root = block_on(ws.tree_with("index.md", options)).unwrap();
+        // No trace of `gone.md` at all — not a `Missing` node, just absent.
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].path, PathBuf::from("notes/a.md"));
+    }
+
+    #[test]
+    fn ignore_missing_only_filters_missing_not_other_marker_kinds() {
+        // A cycle is a different failure mode from a target that never existed;
+        // `ignore_missing` must leave it alone.
+        let dir = tempdir("missing-ignore-cycle");
+        write(&dir, "a.md", "---\ncontents:\n- b.md\n- gone.md\n---\n");
+        write(&dir, "b.md", "---\ncontents:\n- a.md\n---\n");
+
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let options = TreeOptions {
+            ignore_missing: true,
+        };
+        let root = block_on(ws.tree_with("a.md", options)).unwrap();
+        assert_eq!(root.children.len(), 1);
+        let b = &root.children[0];
+        assert_eq!(b.kind, NodeKind::Doc);
+        assert_eq!(b.children.len(), 1);
+        assert_eq!(b.children[0].kind, NodeKind::Cycle);
+    }
+
+    #[test]
+    fn document_reads_full_metadata_for_a_workspace_relative_path() {
+        let dir = tempdir("document");
+        write(
+            &dir,
+            "notes/a.md",
+            "---\ntitle: A\nauthor: Ada\n---\nbody text\n",
+        );
+
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let doc = block_on(ws.document("notes/a.md")).unwrap();
+        assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("A"));
+        assert_eq!(doc.meta.get("author").and_then(Value::as_str), Some("Ada"));
+        assert_eq!(doc.body, "body text\n");
+    }
+
+    #[test]
+    fn document_surfaces_the_error_for_an_unreadable_path() {
+        let dir = tempdir("document-missing");
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        assert!(block_on(ws.document("nope.md")).is_err());
+    }
+
+    #[test]
+    fn fs_path_joins_a_node_path_onto_the_workspace_root() {
+        let dir = tempdir("fs-path");
+        write(&dir, "notes/a.md", "---\ntitle: A\n---\n");
+
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let node = block_on(ws.tree("notes/a.md")).unwrap();
+        assert_eq!(ws.fs_path(&node.path), dir.join("notes/a.md"));
     }
 }

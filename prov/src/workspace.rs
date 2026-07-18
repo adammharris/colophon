@@ -78,6 +78,20 @@ impl<FS, Id, Ix> Workspace<FS, Id, Ix> {
         &self.root
     }
 
+    /// Join a workspace-relative path — a [`Node::path`](crate::tree::Node::path),
+    /// or any other path this crate hands back — onto the workspace root,
+    /// producing the fs-readable form a [`Storage`] read needs.
+    ///
+    /// The two path forms are deliberately kept apart: everything this crate
+    /// returns (`Node::path`, [`Target::Path`], …) is workspace-relative and
+    /// root-independent, so a workspace can be re-rooted to a different
+    /// directory without touching a single stored path. `fs_path` is the one
+    /// place that independence is given up, for the caller that actually needs
+    /// to open the file.
+    pub fn fs_path(&self, rel: impl AsRef<Path>) -> PathBuf {
+        self.root.join(rel)
+    }
+
     /// The configured relation vocabulary.
     pub fn relations(&self) -> &RelationSet {
         &self.relations
@@ -980,6 +994,15 @@ mod tests {
         assert_eq!(ws.relations().spanning_relation(), Some("contents"));
         // Identity off: the default policy fires no triggers.
         assert!(!ws.identity().registration().is_active());
+    }
+
+    #[test]
+    fn fs_path_joins_a_workspace_relative_path_onto_the_root() {
+        let ws = Workspace::builder(DummyFs).root("vault").build();
+        assert_eq!(
+            ws.fs_path(Path::new("notes/a.md")),
+            Path::new("vault/notes/a.md")
+        );
     }
 
     #[test]

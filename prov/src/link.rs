@@ -36,14 +36,42 @@ pub struct Link {
 impl Link {
     /// Parse a raw link string. `[label](target)` yields both parts; anything
     /// else is a bare target with no label. A target wrapped in Markdown angle
-    /// brackets (`<…>`, used when it contains spaces) is unwrapped, so
-    /// [`target`](Link::target) always holds the logical path — leading `/` and
-    /// all — never the delimiters.
+    /// brackets (`<…>`, used when it contains spaces) is unwrapped *only* when
+    /// it appears as the URL portion of a successfully parsed `[label](<target>)`
+    /// — never when it wraps a bare, unlabeled value, which stays byte-literal
+    /// (diaryx reads a bare `<…>` as a literal path, angle brackets and all: see
+    /// [`parse_path_only`](Link::parse_path_only) and the `link_style` render
+    /// tests). A `[[target]]` / `[[target|label]]` Obsidian wikilink scalar is
+    /// also recognized here; use [`parse_path_only`](Link::parse_path_only) when
+    /// the caller's value is a frontmatter *path* field that must not
+    /// reinterpret a literal `[[…]]` string as a wikilink.
     pub fn parse(raw: &str) -> Self {
+        Self::parse_impl(raw, true)
+    }
+
+    /// [`parse`](Link::parse), but never treats `"[[target]]"` as an Obsidian
+    /// wikilink — such a value is left exactly as written (a bare literal, or,
+    /// if it happens to also match `[label](target)`, a markdown link). This is
+    /// the opt-out a frontmatter *path* field needs: diaryx's own path-value
+    /// parser has no wikilink convention at all, so a workspace that stores a
+    /// literal `"[[…]]"`-shaped string in a path property (unusual, but legal
+    /// input data) must round-trip it untouched rather than have `parse`
+    /// silently reinterpret it as a link. Every other rule of `parse` —
+    /// `[label](target)` splitting, balanced parens, angle-bracket unwrapping of
+    /// a parsed URL — applies unchanged.
+    pub fn parse_path_only(raw: &str) -> Self {
+        Self::parse_impl(raw, false)
+    }
+
+    /// Shared implementation behind [`parse`](Link::parse) and
+    /// [`parse_path_only`](Link::parse_path_only); `wikilink` gates the
+    /// `[[target]]` recognition branch.
+    fn parse_impl(raw: &str, wikilink: bool) -> Self {
         let raw = raw.trim();
         // A wikilink scalar — `[[target]]` / `[[target|label]]` — the Obsidian
-        // wrapper permitted in metadata as well as body prose.
-        if let Some(inner) = raw.strip_prefix("[[").and_then(|r| r.strip_suffix("]]")) {
+        // wrapper permitted in metadata as well as body prose. Skipped entirely
+        // by `parse_path_only`.
+        if wikilink && let Some(inner) = raw.strip_prefix("[[").and_then(|r| r.strip_suffix("]]")) {
             let (target, label) = match inner.split_once('|') {
                 Some((target, label)) => (target.trim(), Some(label.trim().to_string())),
                 None => (inner.trim(), None),
@@ -54,19 +82,20 @@ impl Link {
                 wikilink: true,
             };
         }
-        if let Some(rest) = raw.strip_prefix('[')
-            && let Some(inner) = rest.strip_suffix(')')
-            && let Some((label, target)) = inner.split_once("](")
-        {
+        if let Some((label, target)) = split_markdown_link(raw) {
             return Self {
-                label: Some(label.to_string()),
-                target: unbracket(target),
+                label: Some(label),
+                target,
                 wikilink: false,
             };
         }
+        // Bare value: stored byte-literal, angle brackets and all. Unlike the
+        // markdown-link branch above, there is no URL position here to unwrap —
+        // a bare `<…>`-shaped string is data, not delimiters (see `parse`'s doc
+        // comment and the C2 regression tests).
         Self {
             label: None,
-            target: unbracket(raw),
+            target: raw.to_string(),
             wikilink: false,
         }
     }
@@ -114,15 +143,79 @@ impl Link {
     }
 }
 
-/// Strip one pair of Markdown angle-bracket delimiters (`<target>` → `target`),
-/// the convention for a target containing spaces. Any other target is returned
-/// unchanged.
-fn unbracket(target: &str) -> String {
-    target
-        .strip_prefix('<')
-        .and_then(|inner| inner.strip_suffix('>'))
-        .unwrap_or(target)
-        .to_string()
+/// Try to split `raw` as a Markdown link `[label](target)` (or, when the URL
+/// holds a space or paren, `[label](<target>)`). Returns the label and the
+/// unwrapped target, or `None` when `raw` doesn't have this shape.
+///
+/// Ports diaryx_core's `link_parser::try_parse_markdown_link` byte-for-byte
+/// (see module doc comment) rather than re-deriving it, because its two
+/// corrected behaviors are exactly what C2/C3 need and diaryx's test suite is
+/// the ground truth for their edge cases:
+/// - The label is whatever sits between the first `[` and the first `]`
+///   immediately followed by `(` — *not* whatever precedes the last `)` in the
+///   whole string, so trailing prose after the link (`"[Title](/a.md) note"`)
+///   never gets swept into the target.
+/// - The target's closing paren is found by depth-counting (see
+///   [`find_closing_paren`]), so a target containing its own parens
+///   (`/file (1).md`, even nested) still closes at the right `)`; any text
+///   after that `)` is deliberately never inspected — tolerated, not merely
+///   permitted.
+/// - Angle brackets are only unwrapped here, on the URL of a link that already
+///   parsed as `[label](…)` — never on a bare value (that's C2; see
+///   [`Link::parse`]'s doc comment and `parse_impl`'s bare-value branch).
+fn split_markdown_link(raw: &str) -> Option<(String, String)> {
+    if !raw.starts_with('[') {
+        return None;
+    }
+    let close_bracket = raw.find(']')?;
+    if !raw[close_bracket..].starts_with("](") {
+        return None;
+    }
+    let label = raw[1..close_bracket].to_string();
+    let after = &raw[close_bracket + 2..];
+    let target = if let Some(inner) = after.strip_prefix('<') {
+        // `](<target>)`: the closing `>` must be immediately followed by `)` —
+        // otherwise this isn't really an angle-bracketed URL and the whole
+        // markdown-link parse fails (falls through to the bare branch).
+        let close_angle = inner.find('>')?;
+        if inner.get(close_angle + 1..close_angle + 2) != Some(")") {
+            return None;
+        }
+        inner[..close_angle].to_string()
+    } else {
+        let close_paren = find_closing_paren(after)?;
+        after[..close_paren].to_string()
+    };
+    Some((label, target))
+}
+
+/// Find the byte offset of the `)` that balances the *implicit* open paren at
+/// the start of a Markdown link URL — i.e. the first `)` encountered at
+/// nesting depth zero, treating every `(` as opening one more level. A target
+/// with no closing paren at all (an unterminated link) yields `None`.
+///
+/// This is the crux of the C3 fix: the old code demanded the link be the very
+/// end of the input (`raw.strip_suffix(')')` on the whole trimmed string), so
+/// `"[Title](/a.md) trailing junk"` fell through to a bare target holding the
+/// entire string. Scanning for the *matching* close paren instead — and never
+/// examining what follows it — makes the split correct both for a target
+/// containing its own balanced parens (`/file (1).md`, `/file (a (b)).md`) and
+/// for trailing prose after the link.
+fn find_closing_paren(s: &str) -> Option<usize> {
+    let mut depth = 0u32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The writable spelling of a Markdown-link URL: wrapped in angle brackets when
@@ -1035,16 +1128,117 @@ mod tests {
             "[Archived Documents](</Archive/Archived documents.md>)"
         );
 
-        // A bare angle-bracketed target is unwrapped on read (lenient) and
-        // written back bare (diaryx reads a bare `<…>` as a literal path).
+        // A bare angle-bracketed target — no `[label](…)` around it — is
+        // *not* unwrapped: angle brackets are only URL delimiters inside a
+        // parsed markdown link, so a bare `<…>` value stays byte-literal (C2;
+        // diaryx reads a bare `<…>` as a literal path, brackets and all). This
+        // used to unwrap unconditionally; see `bare_angle_bracket_value_stays_literal`
+        // for the dedicated regression coverage.
         let bare = Link::parse("</Creative Writing/Creative Writing.md>");
-        assert_eq!(bare.target, "/Creative Writing/Creative Writing.md");
-        assert_eq!(bare.render(), "/Creative Writing/Creative Writing.md");
+        assert_eq!(bare.target, "</Creative Writing/Creative Writing.md>");
+        assert_eq!(bare.render(), "</Creative Writing/Creative Writing.md>");
 
         // An absolute path without spaces needs no brackets, and stays bare.
         let plain = Link::parse("[Blog](/Blog/Blog.md)");
         assert_eq!(plain.target, "/Blog/Blog.md");
         assert_eq!(plain.render(), "[Blog](/Blog/Blog.md)");
+    }
+
+    /// C2 regression: before the fix, the bare-value fallback ran `unbracket`
+    /// on the *whole* raw value, so any `<...>`-shaped bare string (not just
+    /// the diaryx example above) was silently unwrapped. Now the bare branch
+    /// never touches angle brackets — only a successfully parsed
+    /// `[label](<target>)` URL gets unwrapped.
+    #[test]
+    fn bare_angle_bracket_value_stays_literal() {
+        for raw in ["<notes/a.md>", "<https://example.com>", "<a (b) c>", "<>"] {
+            let l = Link::parse(raw);
+            assert_eq!(l.label, None);
+            assert_eq!(l.target, raw, "bare angle-bracket value must be literal");
+            assert_eq!(l.render(), raw);
+        }
+        // Contrast: the *same* angle-bracketed text, once it's the URL of an
+        // actual markdown link, is unwrapped — that part of the old behavior
+        // was correct and stays.
+        assert_eq!(Link::parse("[x](<notes/a.md>)").target, "notes/a.md");
+    }
+
+    /// C3 regression: before the fix, the markdown-link branch demanded the
+    /// *entire* trimmed input end in `)` (`raw.strip_suffix(')')`), so any
+    /// trailing text after a well-formed link's closing paren made the whole
+    /// value fall through to the bare branch — the complete string, including
+    /// the `[label](target)` syntax, became one literal target. Balanced-paren
+    /// scanning fixes both halves of that: trailing text is tolerated, and
+    /// parens *inside* the target (nested, even) don't confuse the scan.
+    #[test]
+    fn markdown_link_split_tolerates_trailing_text_and_balanced_parens() {
+        // Trailing prose after a legitimate link is ignored, not swallowed.
+        let l = Link::parse("[Title](/path.md) trailing junk");
+        assert_eq!(l.label.as_deref(), Some("Title"));
+        assert_eq!(l.target, "/path.md");
+
+        // A target containing its own parens still closes at the matching `)`.
+        let l = Link::parse("[Explanation (1.1)](/Archive/Explanation (1.1).md)");
+        assert_eq!(l.label.as_deref(), Some("Explanation (1.1)"));
+        assert_eq!(l.target, "/Archive/Explanation (1.1).md");
+
+        // Nested parens in the target keep working.
+        let l = Link::parse("[File (a (b))](/path/file (a (b)).md)");
+        assert_eq!(l.label.as_deref(), Some("File (a (b))"));
+        assert_eq!(l.target, "/path/file (a (b)).md");
+
+        // Trailing text *and* parens in the target, together.
+        let l = Link::parse("[T](/a (1).md) and then some more words");
+        assert_eq!(l.target, "/a (1).md");
+
+        // An angle-bracketed URL still requires the `>` immediately followed by
+        // `)` — trailing text after *that* `)` is likewise tolerated.
+        let l = Link::parse("[Notes](</My Notes/x.md>) ignored tail");
+        assert_eq!(l.target, "/My Notes/x.md");
+
+        // An unterminated target (no closing paren at all) still falls back to
+        // bare, unchanged from before.
+        let unterminated = "[Title](/path.md";
+        assert_eq!(Link::parse(unterminated).render(), unterminated);
+    }
+
+    /// C1: `parse_path_only` opts out of the `[[…]]` wikilink convention so a
+    /// frontmatter path field can hold a literal bracket-shaped string without
+    /// `Link::parse` reinterpreting it — the convention diaryx's own path-value
+    /// parser never had. `parse` is unchanged (still treats it as a wikilink).
+    #[test]
+    fn wikilink_opt_out_keeps_bracket_literal_string() {
+        let ordinary = Link::parse("[[notes/a.md]]");
+        assert!(ordinary.wikilink);
+        assert_eq!(ordinary.target, "notes/a.md");
+
+        let opted_out = Link::parse_path_only("[[notes/a.md]]");
+        assert!(!opted_out.wikilink);
+        assert_eq!(opted_out.label, None);
+        assert_eq!(opted_out.target, "[[notes/a.md]]");
+        assert_eq!(opted_out.render(), "[[notes/a.md]]");
+
+        // A pipe-labeled wikilink scalar is likewise kept as one literal bare
+        // string, not split into label/target.
+        let piped = Link::parse_path_only("[[notes/a.md|My Note]]");
+        assert_eq!(piped.label, None);
+        assert_eq!(piped.target, "[[notes/a.md|My Note]]");
+
+        // Every other `parse` rule is unaffected: markdown links, bare paths,
+        // and angle-bracket handling (both C2's literal-bare and C3's
+        // balanced-paren splitting) all behave identically under the opt-out.
+        assert_eq!(
+            Link::parse_path_only("[Design](docs/design.md)"),
+            Link::parse("[Design](docs/design.md)")
+        );
+        assert_eq!(
+            Link::parse_path_only("notes/a.md"),
+            Link::parse("notes/a.md")
+        );
+        assert_eq!(
+            Link::parse_path_only("<notes/a.md>"),
+            Link::parse("<notes/a.md>")
+        );
     }
 
     #[test]

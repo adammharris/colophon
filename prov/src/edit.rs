@@ -84,6 +84,15 @@ impl MetaEditor {
         Ok(())
     }
 
+    /// Rename the key at `path`, keeping its value, position, and comments.
+    pub fn replace_key(&mut self, path: &[Segment], key: &str) -> Result<()> {
+        match self {
+            MetaEditor::Fenced(e) => e.replace_key(path, key)?,
+            MetaEditor::Whole(e) => e.replace_key(path, key)?,
+        }
+        Ok(())
+    }
+
     /// Append `value` to the sequence at `path`.
     pub fn append_value(&mut self, path: &[Segment], value: impl Into<fig::Value>) -> Result<()> {
         match self {
@@ -107,6 +116,30 @@ impl MetaEditor {
         match self {
             MetaEditor::Fenced(e) => e.remove_item(path, index)?,
             MetaEditor::Whole(e) => e.remove_item(path, index)?,
+        }
+        Ok(())
+    }
+
+    /// Reorder the mapping entries at `path` (empty path = root) so `keys`
+    /// come first, in that order; entries not listed keep their original
+    /// relative order and follow. Unknown keys are ignored. Every entry keeps
+    /// its comments and interleaved trivia.
+    pub fn reorder_keys<S: AsRef<str>>(&mut self, path: &[Segment], keys: &[S]) -> Result<()> {
+        match self {
+            MetaEditor::Fenced(e) => e.reorder_keys(path, keys)?,
+            MetaEditor::Whole(e) => e.reorder_keys(path, keys)?,
+        }
+        Ok(())
+    }
+
+    /// Reorder the sequence at `path` so the items at `indices` (positions in
+    /// the current order) come first, in that order; items not listed keep
+    /// their original relative order and follow. Out-of-range indices are
+    /// ignored.
+    pub fn reorder_items(&mut self, path: &[Segment], indices: &[usize]) -> Result<()> {
+        match self {
+            MetaEditor::Fenced(e) => e.reorder_items(path, indices)?,
+            MetaEditor::Whole(e) => e.reorder_items(path, indices)?,
         }
         Ok(())
     }
@@ -318,5 +351,75 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("- a.md\n- c.md"), "{out}");
+    }
+
+    // ---- MetaEditor parity with fig::Embed: reorder_items/replace_key/reorder_keys ----
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn replace_key_renames_the_key_and_preserves_comments_elsewhere() {
+        let text = "---\n# keep me\ntitle: Old\nauthor: me\n---\nbody\n";
+        let mut editor = MetaEditor::open(text, carrier_of("x.md", text).unwrap()).unwrap();
+        editor.replace_key(&key_path("title"), "name").unwrap();
+        let out = editor.render().unwrap();
+        assert!(out.contains("name: Old"), "{out}");
+        assert!(!out.contains("title:"), "{out}");
+        assert!(out.contains("# keep me"), "comment lost: {out}");
+        assert!(out.contains("author: me"), "{out}");
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn reorder_keys_moves_listed_keys_first_and_preserves_comments() {
+        let text = "---\n# c1\ntitle: T\n# c2\nauthor: me\ndraft: true\n---\nbody\n";
+        let mut editor = MetaEditor::open(text, carrier_of("x.md", text).unwrap()).unwrap();
+        editor
+            .reorder_keys(&[] as &[Segment], &["draft", "title"])
+            .unwrap();
+        let out = editor.render().unwrap();
+        let draft_pos = out.find("draft:").unwrap();
+        let title_pos = out.find("title:").unwrap();
+        let author_pos = out.find("author:").unwrap();
+        assert!(draft_pos < title_pos && title_pos < author_pos, "{out}");
+        assert!(out.contains("# c1"), "comment lost: {out}");
+        assert!(out.contains("# c2"), "comment lost: {out}");
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn reorder_items_moves_listed_items_first_and_preserves_comments() {
+        let text = "---\ncontents:\n- a # keep a\n- b # keep b\n- c # keep c\n---\nbody\n";
+        let mut editor = MetaEditor::open(text, carrier_of("x.md", text).unwrap()).unwrap();
+        editor
+            .reorder_items(&key_path("contents"), &[2, 0])
+            .unwrap();
+        let out = editor.render().unwrap();
+        assert!(out.contains("# keep a"), "comment lost: {out}");
+        assert!(out.contains("# keep b"), "comment lost: {out}");
+        assert!(out.contains("# keep c"), "comment lost: {out}");
+        let a_pos = out.find("- a").unwrap();
+        let b_pos = out.find("- b").unwrap();
+        let c_pos = out.find("- c").unwrap();
+        // indices [2, 0] -> c, a first (in that order), then the unlisted b follows.
+        assert!(c_pos < a_pos && a_pos < b_pos, "{out}");
+    }
+
+    #[cfg(feature = "yaml")]
+    #[test]
+    fn reorder_keys_works_on_a_whole_file_config_document() {
+        // Exercises the `MetaEditor::Whole` arm (a config document, not a
+        // fenced block) — the same op, the other carrier.
+        let text =
+            "# workspace registry\ntitle: ID registry\npart_of: index.md\nregistry:\n  abc: a.md\n";
+        let mut editor =
+            MetaEditor::open(text, carrier_of("registry.yaml", text).unwrap()).unwrap();
+        editor
+            .reorder_keys(&[] as &[Segment], &["part_of"])
+            .unwrap();
+        let out = editor.render().unwrap();
+        let part_of_pos = out.find("part_of:").unwrap();
+        let title_pos = out.find("title:").unwrap();
+        assert!(part_of_pos < title_pos, "{out}");
+        assert!(out.contains("# workspace registry"), "comment lost: {out}");
     }
 }

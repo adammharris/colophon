@@ -80,13 +80,13 @@ pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
 pub use discovery::{Discovered, Discovery, discover};
 pub use document::{
-    Document, EmbedStyle, EmbedType, embed_carrier, embed_style_of, is_opaque_payload,
+    Document, EmbedStyle, EmbedType, MetaCarrier, embed_carrier, embed_style_of, is_opaque_payload,
 };
 pub use error::{Error, Result};
 pub use exec::block_on;
 pub use fig::Format;
 pub use fs::{Capabilities, StdFs, Storage};
-pub use identity::{Id, IdentityPolicy, Minter, Registration, Trigger};
+pub use identity::{Id, IdentityPolicy, Minter, NoIdentity, Registration, Trigger};
 pub use index::{FileIndex, InMemoryIndex, IndexStore, NoIndex};
 pub use intake::{Adoption, PlanOutcome, StructurePlan, SynthNode};
 pub use journal::{Recovered, recover};
@@ -99,6 +99,6 @@ pub use mutate::Created;
 pub use relation::{Cardinality, Edge, Relation, RelationSet};
 pub use route::{Layout, RoutePlan};
 pub use title::{TitleIndex, TitleMatch};
-pub use tree::{Node, NodeKind};
+pub use tree::{Node, NodeKind, TreeOptions};
 pub use validate::{Backlink, CensusEntry, Finding, Fix, LinkSite, Resolution};
-pub use workspace::{Target, Workspace};
+pub use workspace::{Target, Workspace, WorkspaceBuilder};
