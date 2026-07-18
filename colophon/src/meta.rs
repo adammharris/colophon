@@ -88,7 +88,10 @@ impl Value {
     pub fn link_strings(&self) -> Vec<String> {
         match self {
             Value::String(s) => vec![s.clone()],
-            Value::Sequence(seq) => seq.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect(),
+            Value::Sequence(seq) => seq
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -129,7 +132,10 @@ pub fn serialize_mapping(map: &Mapping, format: fig::Format) -> Result<String> {
 /// is for whole frontmatter blocks, this is for a value plucked out of one
 /// (the CLI's `get` on a compound field).
 pub fn serialize_value(value: &Value, format: fig::Format) -> Result<String> {
-    Ok(fig::Value::from(value).serialize_with(format, fig::SerializeOptions::default().width(1))?)
+    Ok(
+        fig::Value::from(value)
+            .serialize_with(format, fig::SerializeOptions::default().width(1))?,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +211,11 @@ mod tests {
     #[cfg(feature = "yaml")]
     #[test]
     fn parses_frontmatter_mapping() {
-        let m = parse_mapping("title: Hello\ncount: 42\ntags:\n- a\n- b\n", fig::Format::Yaml).unwrap();
+        let m = parse_mapping(
+            "title: Hello\ncount: 42\ntags:\n- a\n- b\n",
+            fig::Format::Yaml,
+        )
+        .unwrap();
         assert_eq!(m.get("title").and_then(Value::as_str), Some("Hello"));
         assert_eq!(m.get("count"), Some(&Value::Int(42)));
         assert_eq!(
@@ -228,7 +238,11 @@ mod tests {
     #[test]
     fn link_strings_handles_scalar_and_sequence() {
         assert_eq!(Value::String("x".into()).link_strings(), vec!["x"]);
-        let seq = Value::Sequence(vec![Value::String("a".into()), Value::Int(3), Value::String("b".into())]);
+        let seq = Value::Sequence(vec![
+            Value::String("a".into()),
+            Value::Int(3),
+            Value::String("b".into()),
+        ]);
         assert_eq!(seq.link_strings(), vec!["a".to_string(), "b".to_string()]);
         assert!(Value::Null.link_strings().is_empty());
     }
@@ -237,7 +251,11 @@ mod tests {
     #[test]
     fn round_trips_through_fig() {
         for format in [fig::Format::Yaml, fig::Format::Fig] {
-            let m = parse_mapping("title: Root\ncontents:\n- a.md\n- b.md\n", fig::Format::Yaml).unwrap();
+            let m = parse_mapping(
+                "title: Root\ncontents:\n- a.md\n- b.md\n",
+                fig::Format::Yaml,
+            )
+            .unwrap();
             let out = serialize_mapping(&m, format).unwrap();
             let reparsed = parse_mapping(&out, format).unwrap();
             assert_eq!(m, reparsed, "round-trip through {format:?}");

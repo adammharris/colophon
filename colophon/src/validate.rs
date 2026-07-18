@@ -87,7 +87,10 @@ pub enum Resolution {
     MalformedId,
     /// A nominal (alias) target several documents claim — unresolvable.
     /// `candidates` are the sharers, sorted.
-    AmbiguousAlias { name: String, candidates: Vec<PathBuf> },
+    AmbiguousAlias {
+        name: String,
+        candidates: Vec<PathBuf>,
+    },
     /// A URL / mail address — off-workspace, never resolved or rewritten.
     External,
 }
@@ -128,14 +131,20 @@ impl CensusEntry {
         let site = self.site.clone();
         let target = self.target_text.clone();
         match &self.resolution {
-            Resolution::CaseMismatch { actual, .. } => {
-                Some(Finding::CaseMismatch { doc, site, target, actual: actual.clone() })
-            }
+            Resolution::CaseMismatch { actual, .. } => Some(Finding::CaseMismatch {
+                doc,
+                site,
+                target,
+                actual: actual.clone(),
+            }),
             Resolution::Broken => Some(Finding::BrokenLink { doc, site, target }),
             Resolution::MalformedId => Some(Finding::MalformedId { doc, site, target }),
-            Resolution::DanglingId { id, tombstoned } => {
-                Some(Finding::DanglingId { doc, site, id: id.clone(), tombstoned: *tombstoned })
-            }
+            Resolution::DanglingId { id, tombstoned } => Some(Finding::DanglingId {
+                doc,
+                site,
+                id: id.clone(),
+                tombstoned: *tombstoned,
+            }),
             Resolution::AmbiguousAlias { name, candidates } => Some(Finding::AmbiguousAlias {
                 doc,
                 site,
@@ -168,36 +177,67 @@ pub struct Backlink {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Finding {
     /// `target` (written at `site`) resolves to nothing on disk.
-    BrokenLink { doc: PathBuf, site: LinkSite, target: String },
+    BrokenLink {
+        doc: PathBuf,
+        site: LinkSite,
+        target: String,
+    },
     /// `target` only resolves case-insensitively; the exact on-disk name is
     /// `actual`. Portable workspaces need the exact name.
-    CaseMismatch { doc: PathBuf, site: LinkSite, target: String, actual: String },
+    CaseMismatch {
+        doc: PathBuf,
+        site: LinkSite,
+        target: String,
+        actual: String,
+    },
     /// A spanning target that was already reached — a containment cycle or a
     /// second parent, either of which breaks the single-parent spanning tree.
     DuplicateContainment { doc: PathBuf, target: String },
     /// A spanning child whose inverse field does not link back to `doc`.
-    MissingInverse { doc: PathBuf, child: PathBuf, inverse: String },
+    MissingInverse {
+        doc: PathBuf,
+        child: PathBuf,
+        inverse: String,
+    },
     /// A document that exists but could not be read or parsed.
     Unreadable { doc: PathBuf, error: String },
     /// A `colophon:<id>` reference whose ID fails the shape/check-character
     /// test — almost certainly a typo, caught before it dangles silently.
-    MalformedId { doc: PathBuf, site: LinkSite, target: String },
+    MalformedId {
+        doc: PathBuf,
+        site: LinkSite,
+        target: String,
+    },
     /// A well-formed `id:<id>` reference with no live registry entry.
     /// `tombstoned` distinguishes "that document was deleted" from "this ID
     /// was never issued here" (an out-of-band reference the registry has not
     /// reconciled — DESIGN §4's known hazard).
-    DanglingId { doc: PathBuf, site: LinkSite, id: Id, tombstoned: bool },
+    DanglingId {
+        doc: PathBuf,
+        site: LinkSite,
+        id: Id,
+        tombstoned: bool,
+    },
     /// A nominal (alias) reference whose name several documents claim, so it
     /// cannot resolve to one — the fallible edge of title-based linking.
     /// `candidates` are the documents that share the name, sorted.
-    AmbiguousAlias { doc: PathBuf, site: LinkSite, name: String, candidates: Vec<PathBuf> },
+    AmbiguousAlias {
+        doc: PathBuf,
+        site: LinkSite,
+        name: String,
+        candidates: Vec<PathBuf>,
+    },
     /// A document's self-stored `id` frontmatter disagrees with the registry —
     /// the portable shadow copy and the registry entry have drifted (an
     /// out-of-band edit or move). `frontmatter` is the ID the document claims;
     /// `registry` is the ID the registry records for this path, or `None` when
     /// the registry instead assigns the claimed ID to a *different* document. A
     /// reconcile hazard specific to frontmatter storage (DESIGN §5).
-    IdMismatch { doc: PathBuf, frontmatter: Id, registry: Option<Id> },
+    IdMismatch {
+        doc: PathBuf,
+        frontmatter: Id,
+        registry: Option<Id>,
+    },
     /// A document carries a self-stored `id` the registry has no record of — the
     /// portable shadow got ahead of the cache (a document copied in with its
     /// `id`, or a registry rebuilt from a stale snapshot). Reconcilable by
@@ -215,7 +255,11 @@ pub enum Finding {
     /// the finding asks whether the change was *intended* (an out-of-band edit →
     /// re-stamp) or *corruption* (→ restore from backup), a judgment colophon
     /// surfaces rather than makes.
-    FixityMismatch { doc: PathBuf, recorded: String, actual: String },
+    FixityMismatch {
+        doc: PathBuf,
+        recorded: String,
+        actual: String,
+    },
     /// A key in the workspace's config document that [`WorkspaceConfig::apply`]
     /// silently ignores — a misspelled key that resembles a real axis, or a
     /// recognized axis with a value colophon does not understand. In both cases
@@ -225,7 +269,10 @@ pub enum Finding {
     /// author's, not a mechanical rewrite.
     ///
     /// [`WorkspaceConfig::apply`]: crate::config::WorkspaceConfig::apply
-    ConfigIssue { doc: PathBuf, issue: crate::config::ConfigIssue },
+    ConfigIssue {
+        doc: PathBuf,
+        issue: crate::config::ConfigIssue,
+    },
     /// A config surface declares a `spec` (`declared`) newer than this build
     /// understands ([`SPEC_VERSION`](crate::config::SPEC_VERSION)), so colophon
     /// may be silently ignoring settings a newer colophon wrote. Diagnosis only —
@@ -239,7 +286,12 @@ impl fmt::Display for Finding {
             Finding::BrokenLink { doc, site, target } => {
                 write!(f, "{}: broken {site} link: {target}", doc.display())
             }
-            Finding::CaseMismatch { doc, site, target, actual } => write!(
+            Finding::CaseMismatch {
+                doc,
+                site,
+                target,
+                actual,
+            } => write!(
                 f,
                 "{}: case mismatch in {site} link: {target} is {actual} on disk",
                 doc.display()
@@ -249,7 +301,11 @@ impl fmt::Display for Finding {
                 "{}: {target} is already contained elsewhere (cycle or second parent)",
                 doc.display()
             ),
-            Finding::MissingInverse { doc, child, inverse } => write!(
+            Finding::MissingInverse {
+                doc,
+                child,
+                inverse,
+            } => write!(
                 f,
                 "{}: child {} does not declare {inverse} back to it",
                 doc.display(),
@@ -263,20 +319,42 @@ impl fmt::Display for Finding {
                 "{}: malformed ID in {site} link: {target} (bad shape or check character)",
                 doc.display()
             ),
-            Finding::DanglingId { doc, site, id, tombstoned } => write!(
+            Finding::DanglingId {
+                doc,
+                site,
+                id,
+                tombstoned,
+            } => write!(
                 f,
                 "{}: dangling {site} ID: id:{id} ({})",
                 doc.display(),
-                if *tombstoned { "document was deleted" } else { "never issued in this registry" }
+                if *tombstoned {
+                    "document was deleted"
+                } else {
+                    "never issued in this registry"
+                }
             ),
-            Finding::AmbiguousAlias { doc, site, name, candidates } => write!(
+            Finding::AmbiguousAlias {
+                doc,
+                site,
+                name,
+                candidates,
+            } => write!(
                 f,
                 "{}: ambiguous {site} alias: [[{name}]] matches {} documents ({})",
                 doc.display(),
                 candidates.len(),
-                candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                candidates
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
-            Finding::IdMismatch { doc, frontmatter, registry } => match registry {
+            Finding::IdMismatch {
+                doc,
+                frontmatter,
+                registry,
+            } => match registry {
                 Some(reg) => write!(
                     f,
                     "{}: id mismatch: frontmatter says id:{frontmatter} but the registry records id:{reg} for this path",
@@ -294,7 +372,11 @@ impl fmt::Display for Finding {
                 doc.display()
             ),
             Finding::Orphan { doc } => {
-                write!(f, "{}: orphan — on disk but not linked into the workspace", doc.display())
+                write!(
+                    f,
+                    "{}: orphan — on disk but not linked into the workspace",
+                    doc.display()
+                )
             }
             Finding::FixityMismatch { doc, .. } => write!(
                 f,
@@ -339,7 +421,12 @@ pub enum Fix {
     /// style, or a `colophon:<id>` when the workspace authors id links — is
     /// produced when the fix is applied (which may register `parent`), so the
     /// repair matches how the workspace authors every other link.
-    AddInverse { doc: PathBuf, relation: String, parent: PathBuf, title: String },
+    AddInverse {
+        doc: PathBuf,
+        relation: String,
+        parent: PathBuf,
+        title: String,
+    },
     /// Repair a [`Finding::IdMismatch`] by *trusting the registry*: rewrite the
     /// document's `id` frontmatter to `id` (the ID the registry records for its
     /// path). The registry is the durable, tombstone-bearing side, so it wins.
@@ -359,17 +446,35 @@ pub enum Fix {
 impl fmt::Display for Fix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Fix::AddInverse { doc, relation, parent, .. } => {
-                write!(f, "declare {relation} → {} in {}", parent.display(), doc.display())
+            Fix::AddInverse {
+                doc,
+                relation,
+                parent,
+                ..
+            } => {
+                write!(
+                    f,
+                    "declare {relation} → {} in {}",
+                    parent.display(),
+                    doc.display()
+                )
             }
             Fix::SetId { doc, id } => {
-                write!(f, "set id:{id} in {} (matching the registry)", doc.display())
+                write!(
+                    f,
+                    "set id:{id} in {} (matching the registry)",
+                    doc.display()
+                )
             }
             Fix::RegisterId { doc, id } => {
                 write!(f, "register id:{id} → {} in the registry", doc.display())
             }
             Fix::RestampFixity { doc, .. } => {
-                write!(f, "re-stamp the content checksum in {} to the current bytes", doc.display())
+                write!(
+                    f,
+                    "re-stamp the content checksum in {} to the current bytes",
+                    doc.display()
+                )
             }
         }
     }
@@ -388,7 +493,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     /// a contested containment and is left alone.
     pub async fn suggest_fix(&self, finding: &Finding) -> Result<Option<Fix>> {
         match finding {
-            Finding::MissingInverse { doc: parent, child, inverse } => {
+            Finding::MissingInverse {
+                doc: parent,
+                child,
+                inverse,
+            } => {
                 // Safe only when the child makes no other (cardinality-one) parent claim.
                 let (_, child_doc) = self.load(child).await?;
                 if child_doc.meta.get(inverse).is_some() {
@@ -415,19 +524,26 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             // this path. Only when the registry actually names an id for the path;
             // the `None` case (the id belongs to *another* document) is a genuine
             // conflict a human must resolve, so it is left as diagnosis.
-            Finding::IdMismatch { doc, registry: Some(reg), .. } => {
-                Ok(Some(Fix::SetId { doc: doc.clone(), id: reg.clone() }))
-            }
+            Finding::IdMismatch {
+                doc,
+                registry: Some(reg),
+                ..
+            } => Ok(Some(Fix::SetId {
+                doc: doc.clone(),
+                id: reg.clone(),
+            })),
             Finding::IdMismatch { registry: None, .. } => Ok(None),
             // Adopt the self-stored id into the registry.
-            Finding::UnregisteredId { doc, frontmatter } => {
-                Ok(Some(Fix::RegisterId { doc: doc.clone(), id: frontmatter.clone() }))
-            }
+            Finding::UnregisteredId { doc, frontmatter } => Ok(Some(Fix::RegisterId {
+                doc: doc.clone(),
+                id: frontmatter.clone(),
+            })),
             // Re-stamp to the current bytes — accept the change. The current hash
             // is already computed in the finding, so no re-read is needed.
-            Finding::FixityMismatch { doc, actual, .. } => {
-                Ok(Some(Fix::RestampFixity { doc: doc.clone(), hash: actual.clone() }))
-            }
+            Finding::FixityMismatch { doc, actual, .. } => Ok(Some(Fix::RestampFixity {
+                doc: doc.clone(),
+                hash: actual.clone(),
+            })),
             _ => Ok(None),
         }
     }
@@ -440,12 +556,19 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     /// the walk raises from traversal state.
     pub async fn check(&self, start: impl AsRef<Path>) -> Result<Vec<Finding>> {
         let start = start.as_ref();
-        let Walk { census, mut findings, content_bodies } = self.walk(start).await?;
+        let Walk {
+            census,
+            mut findings,
+            content_bodies,
+        } = self.walk(start).await?;
         for entry in &census {
             findings.extend(entry.finding());
         }
         findings.extend(self.orphans(start, &census, &content_bodies).await?);
-        findings.extend(self.fixity_findings(start, &census, &content_bodies).await?);
+        findings.extend(
+            self.fixity_findings(start, &census, &content_bodies)
+                .await?,
+        );
         findings.extend(self.config_findings(start).await?);
         Ok(findings)
     }
@@ -468,7 +591,10 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         {
             let doc = start.to_path_buf();
             findings.extend(crate::config::diagnose(block).into_iter().map(|issue| {
-                Finding::ConfigIssue { doc: doc.clone(), issue }
+                Finding::ConfigIssue {
+                    doc: doc.clone(),
+                    issue,
+                }
             }));
             if let Some(declared) = crate::config::spec_ahead(block) {
                 findings.push(Finding::ConfigSpecAhead { doc, declared });
@@ -478,10 +604,16 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         if let Some(config_doc) = self.config_path(start).await? {
             let (_, doc) = self.load(&config_doc).await?;
             findings.extend(crate::config::diagnose(&doc.meta).into_iter().map(|issue| {
-                Finding::ConfigIssue { doc: config_doc.clone(), issue }
+                Finding::ConfigIssue {
+                    doc: config_doc.clone(),
+                    issue,
+                }
             }));
             if let Some(declared) = crate::config::spec_ahead(&doc.meta) {
-                findings.push(Finding::ConfigSpecAhead { doc: config_doc.clone(), declared });
+                findings.push(Finding::ConfigSpecAhead {
+                    doc: config_doc.clone(),
+                    declared,
+                });
             }
         }
         Ok(findings)
@@ -589,8 +721,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let (original, doc) = self.load(&path).await?;
 
         // Fixity: does this document's kind get hashed, and has it drifted?
-        let covered =
-            if doc.is_attachment() { self.fixity().covers_payloads() } else { self.fixity().covers_bodies() };
+        let covered = if doc.is_attachment() {
+            self.fixity().covers_payloads()
+        } else {
+            self.fixity().covers_bodies()
+        };
         let new_hash = if covered {
             let hash = match doc.content_attr() {
                 Some(raw) => {
@@ -610,13 +745,23 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let mut text = original;
         let mut wrote = false;
         if let Some(hash) = new_hash {
-            text = crate::edit::set_in_text(&text, doc.carrier, "content_hash", fig::Value::Str(hash))?;
+            text = crate::edit::set_in_text(
+                &text,
+                doc.carrier,
+                "content_hash",
+                fig::Value::Str(hash),
+            )?;
             wrote = true;
         }
         if let Some((field, at)) = updated
             && !field.is_empty()
         {
-            text = crate::edit::set_in_text(&text, doc.carrier, field, fig::Value::Str(at.to_string()))?;
+            text = crate::edit::set_in_text(
+                &text,
+                doc.carrier,
+                field,
+                fig::Value::Str(at.to_string()),
+            )?;
             wrote = true;
         }
         if !wrote {
@@ -689,7 +834,10 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .filter(|p| ContentFormat::from_extension(p).is_some() && !reachable.contains(p))
             .collect();
         docs.sort();
-        Ok(docs.into_iter().map(|doc| Finding::Orphan { doc }).collect())
+        Ok(docs
+            .into_iter()
+            .map(|doc| Finding::Orphan { doc })
+            .collect())
     }
 
     /// Take a census of every forward link reachable from `start`: one
@@ -709,7 +857,10 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     /// id-form alike. This is the census inverted — recomputed from the
     /// documents, so it is always fresh (the Route-N "reconcile-on-load": no
     /// stored index to drift). Each target's backlinks are sorted by source.
-    pub async fn backlinks(&self, start: impl AsRef<Path>) -> Result<BTreeMap<PathBuf, Vec<Backlink>>> {
+    pub async fn backlinks(
+        &self,
+        start: impl AsRef<Path>,
+    ) -> Result<BTreeMap<PathBuf, Vec<Backlink>>> {
         let mut map: BTreeMap<PathBuf, Vec<Backlink>> = BTreeMap::new();
         for entry in self.census(start).await? {
             let by_id = matches!(entry.resolution, Resolution::Id { .. });
@@ -744,7 +895,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .filter(|entry| entry.resolution.resolved_path() == Some(&target))
             .map(|entry| {
                 let by_id = matches!(entry.resolution, Resolution::Id { .. });
-                Backlink { source: entry.source, site: entry.site, by_id }
+                Backlink {
+                    source: entry.source,
+                    site: entry.site,
+                    by_id,
+                }
             })
             .collect();
         links.sort_by(|a, b| a.source.cmp(&b.source).then(a.by_id.cmp(&b.by_id)));
@@ -788,7 +943,10 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             let doc = match self.load(&path).await {
                 Ok((_, doc)) => doc,
                 Err(e) => {
-                    structural.push(Finding::Unreadable { doc: path, error: e.to_string() });
+                    structural.push(Finding::Unreadable {
+                        doc: path,
+                        error: e.to_string(),
+                    });
                     continue;
                 }
             };
@@ -820,8 +978,10 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                         // resolve == this path but no reverse entry: consistent.
                         Some(_) => {}
                         // The registry has no record of this id at all.
-                        None => structural
-                            .push(Finding::UnregisteredId { doc: path.clone(), frontmatter: fm }),
+                        None => structural.push(Finding::UnregisteredId {
+                            doc: path.clone(),
+                            frontmatter: fm,
+                        }),
                     },
                 }
             }
@@ -850,8 +1010,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                             && let Ok((_, child_doc)) = self.load(&resolved).await
                             && child_doc.has_meta()
                         {
-                            let inverse_targets =
-                                child_doc.meta.get(inverse).map(Value::link_strings).unwrap_or_default();
+                            let inverse_targets = child_doc
+                                .meta
+                                .get(inverse)
+                                .map(Value::link_strings)
+                                .unwrap_or_default();
                             // Build the title index if a nominal inverse link needs it.
                             if titles.is_none()
                                 && inverse_targets
@@ -927,7 +1090,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 }
             }
         }
-        Ok(Walk { census, findings: structural, content_bodies })
+        Ok(Walk {
+            census,
+            findings: structural,
+            content_bodies,
+        })
     }
 
     /// Resolve one forward link (declared in the document at `source`) into a
@@ -951,8 +1118,14 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 return Resolution::MalformedId;
             }
             return match self.index().resolve(&id) {
-                Some(path) => Resolution::Id { id, to: link::normalize(path) },
-                None => Resolution::DanglingId { tombstoned: self.index().is_known(&id), id },
+                Some(path) => Resolution::Id {
+                    id,
+                    to: link::normalize(path),
+                },
+                None => Resolution::DanglingId {
+                    tombstoned: self.index().is_known(&id),
+                    id,
+                },
             };
         }
         // Only a nominal link needs the title index; the caller builds it lazily
@@ -963,12 +1136,17 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 TitleMatch::Unique(path) => {
                     return match self.exact_name(&path).await {
                         NameMatch::Exact => Resolution::Path(path),
-                        NameMatch::CaseOnly(actual) => Resolution::CaseMismatch { got: path, actual },
+                        NameMatch::CaseOnly(actual) => {
+                            Resolution::CaseMismatch { got: path, actual }
+                        }
                         NameMatch::None => Resolution::Broken,
                     };
                 }
                 TitleMatch::Ambiguous(candidates) => {
-                    return Resolution::AmbiguousAlias { name: link.target.clone(), candidates };
+                    return Resolution::AmbiguousAlias {
+                        name: link.target.clone(),
+                        candidates,
+                    };
                 }
                 TitleMatch::Unknown => {}
             }
@@ -976,7 +1154,10 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let resolved = link::resolve(source, &link.target);
         match self.exact_name(&resolved).await {
             NameMatch::Exact => Resolution::Path(resolved),
-            NameMatch::CaseOnly(actual) => Resolution::CaseMismatch { got: resolved, actual },
+            NameMatch::CaseOnly(actual) => Resolution::CaseMismatch {
+                got: resolved,
+                actual,
+            },
             NameMatch::None => Resolution::Broken,
         }
     }
@@ -993,7 +1174,9 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         };
         let mut case_only = None;
         for entry in entries {
-            let Some(entry_name) = entry.file_name() else { continue };
+            let Some(entry_name) = entry.file_name() else {
+                continue;
+            };
             if entry_name == name {
                 return NameMatch::Exact;
             }
@@ -1017,20 +1200,35 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     pub async fn apply_fix(&mut self, fix: &Fix) -> Result<()> {
         let mut cs = self.change();
         match fix {
-            Fix::AddInverse { doc, relation, parent, title } => {
+            Fix::AddInverse {
+                doc,
+                relation,
+                parent,
+                title,
+            } => {
                 // The parent exists (this repair points a child back at it), so an
                 // id link registers it by path. Authored in `relation`'s style.
-                let target = self.authored_target(relation, doc, parent, title, true).await?;
+                let target = self
+                    .authored_target(relation, doc, parent, title, true)
+                    .await?;
                 let (text, parsed) = self.load(doc).await?;
-                let updated =
-                    crate::edit::set_in_text(&text, parsed.carrier, relation, fig::Value::Str(target))?;
+                let updated = crate::edit::set_in_text(
+                    &text,
+                    parsed.carrier,
+                    relation,
+                    fig::Value::Str(target),
+                )?;
                 cs.write(doc, updated);
             }
             // Trust the registry: overwrite the document's `id` frontmatter.
             Fix::SetId { doc, id } => {
                 let (text, parsed) = self.load(doc).await?;
-                let updated =
-                    crate::edit::set_in_text(&text, parsed.carrier, "id", fig::Value::Str(id.0.clone()))?;
+                let updated = crate::edit::set_in_text(
+                    &text,
+                    parsed.carrier,
+                    "id",
+                    fig::Value::Str(id.0.clone()),
+                )?;
                 cs.write(doc, updated);
             }
             // Adopt the frontmatter id into the registry (a cache update, no doc
@@ -1117,7 +1315,9 @@ mod tests {
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
         assert!(
-            findings.iter().any(|f| matches!(f, Finding::BrokenLink { target, .. } if target == "gone.md")),
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::BrokenLink { target, .. } if target == "gone.md")),
             "{findings:?}"
         );
         assert!(
@@ -1150,8 +1350,10 @@ mod tests {
 
         // The frontmatter `contents` edge, resolving to the existing file.
         assert!(
-            census.iter().any(|e| matches!(&e.site, LinkSite::Relation(r) if r == "contents")
-                && matches!(&e.resolution, Resolution::Path(p) if p == &PathBuf::from("a.md"))),
+            census.iter().any(
+                |e| matches!(&e.site, LinkSite::Relation(r) if r == "contents")
+                    && matches!(&e.resolution, Resolution::Path(p) if p == &PathBuf::from("a.md"))
+            ),
             "{census:?}"
         );
         // The body wikilink to the same file — sited in the body, resolving.
@@ -1163,8 +1365,9 @@ mod tests {
         );
         // The body wikilink to a missing file — a Broken resolution.
         assert!(
-            census.iter().any(|e| e.target_text == "gone.md"
-                && matches!(e.resolution, Resolution::Broken)),
+            census
+                .iter()
+                .any(|e| e.target_text == "gone.md" && matches!(e.resolution, Resolution::Broken)),
             "{census:?}"
         );
     }
@@ -1195,8 +1398,8 @@ mod tests {
             "{to_a:?}"
         );
         assert!(
-            to_a.iter().any(|bl| bl.source == Path::new("b.md")
-                && matches!(bl.site, LinkSite::Body(_))),
+            to_a.iter()
+                .any(|bl| bl.source == Path::new("b.md") && matches!(bl.site, LinkSite::Body(_))),
             "{to_a:?}"
         );
         // All path-form (this workspace has no registry / id links).
@@ -1210,7 +1413,11 @@ mod tests {
     #[test]
     fn check_flags_a_broken_body_wikilink() {
         let dir = tempdir("body-broken");
-        write(&dir, "index.md", "---\ntitle: Root\n---\nSee [[gone.md]] for more.\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\n---\nSee [[gone.md]] for more.\n",
+        );
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
         assert!(
@@ -1227,7 +1434,11 @@ mod tests {
         let dir = tempdir("alias-check");
         // Body aliases: `[[Alpha]]` is unique (clean), `[[Dup]]` is claimed by
         // two documents (ambiguous → a finding).
-        write(&dir, "index.md", "---\ntitle: Root\n---\nSee [[Alpha]] and [[Dup]].\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\n---\nSee [[Alpha]] and [[Dup]].\n",
+        );
         write(&dir, "alpha.md", "---\ntitle: Alpha\n---\n");
         write(&dir, "one.md", "---\ntitle: Dup\n---\n");
         write(&dir, "two.md", "---\ntitle: Dup\n---\n");
@@ -1236,7 +1447,9 @@ mod tests {
         let findings = block_on(ws.check("index.md")).unwrap();
         // The unique alias produced no finding; the ambiguous one did.
         assert!(
-            !findings.iter().any(|f| matches!(f, Finding::AmbiguousAlias { name, .. } if name == "Alpha")),
+            !findings
+                .iter()
+                .any(|f| matches!(f, Finding::AmbiguousAlias { name, .. } if name == "Alpha")),
             "unique alias must resolve cleanly: {findings:?}"
         );
         assert!(
@@ -1258,9 +1471,21 @@ mod tests {
         // unlinked `vendor/`. A whole-repo scan would make `[[Target]]` ambiguous;
         // the scoped scan resolves it to the one in the workspace.
         let dir = tempdir("alias-scope");
-        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- notes/a.md\n- notes/target.md\n---\n");
-        write(&dir, "notes/a.md", "---\ntitle: A\npart_of: ../index.md\n---\nSee [[Target]].\n");
-        write(&dir, "notes/target.md", "---\ntitle: Target\npart_of: ../index.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- notes/a.md\n- notes/target.md\n---\n",
+        );
+        write(
+            &dir,
+            "notes/a.md",
+            "---\ntitle: A\npart_of: ../index.md\n---\nSee [[Target]].\n",
+        );
+        write(
+            &dir,
+            "notes/target.md",
+            "---\ntitle: Target\npart_of: ../index.md\n---\n",
+        );
         // A same-titled document in an unreached directory — never linked.
         write(&dir, "vendor/dup.md", "---\ntitle: Target\n---\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
@@ -1268,11 +1493,17 @@ mod tests {
         let findings = block_on(ws.check("index.md")).unwrap();
         // `[[Target]]` resolves to the workspace document, not flagged ambiguous…
         assert!(
-            !findings.iter().any(|f| matches!(f, Finding::AmbiguousAlias { name, .. } if name == "Target")),
+            !findings
+                .iter()
+                .any(|f| matches!(f, Finding::AmbiguousAlias { name, .. } if name == "Target")),
             "the vendored duplicate must not make the alias ambiguous: {findings:?}"
         );
         // …and the unreached `vendor/` is invisible — no orphan for its document.
-        assert_eq!(findings, vec![], "clean: vendored subtree neither collides nor orphans: {findings:?}");
+        assert_eq!(
+            findings,
+            vec![],
+            "clean: vendored subtree neither collides nor orphans: {findings:?}"
+        );
     }
 
     // Real-world regression: a fenced code block containing Python list
@@ -1294,8 +1525,10 @@ mod tests {
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
 
-        let broken: Vec<_> =
-            findings.iter().filter(|f| matches!(f, Finding::BrokenLink { .. })).collect();
+        let broken: Vec<_> = findings
+            .iter()
+            .filter(|f| matches!(f, Finding::BrokenLink { .. }))
+            .collect();
         assert_eq!(broken.len(), 1, "{findings:?}");
         assert!(matches!(broken[0], Finding::BrokenLink { target, .. } if target == "gone.md"));
     }
@@ -1303,7 +1536,11 @@ mod tests {
     #[test]
     fn a_resolving_body_wikilink_is_not_a_finding() {
         let dir = tempdir("body-clean");
-        write(&dir, "index.md", "---\ncontents:\n- a.md\n---\nSee [[a.md]].\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ncontents:\n- a.md\n---\nSee [[a.md]].\n",
+        );
         write(&dir, "a.md", "---\npart_of: index.md\n---\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
         assert_eq!(block_on(ws.check("index.md")).unwrap(), vec![]);
@@ -1315,7 +1552,11 @@ mod tests {
         // angle-bracketed, workspace-absolute path, and the child points back
         // by an absolute path. Everything must resolve — no missing/broken.
         let dir = tempdir("archive-links");
-        write(&dir, "index.md", "---\ncontents:\n- '[Notes](</My Notes/notes.md>)'\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ncontents:\n- '[Notes](</My Notes/notes.md>)'\n---\n",
+        );
         write(&dir, "My Notes/notes.md", "---\npart_of: /index.md\n---\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
 
@@ -1336,11 +1577,19 @@ mod tests {
         write(&dir, "index.md", "---\ncontents:\n- a.md\n---\n");
         write(&dir, "a.md", "---\ntitle: A\n---\n"); // no part_of → MissingInverse
         // Plain-canonical style keeps the assertion about the fix simple.
-        let mut ws = Workspace::builder(StdFs).root(&dir).link_style(LinkStyle::PlainCanonical).build();
+        let mut ws = Workspace::builder(StdFs)
+            .root(&dir)
+            .link_style(LinkStyle::PlainCanonical)
+            .build();
 
         let findings = block_on(ws.check("index.md")).unwrap();
-        let mi = findings.iter().find(|f| matches!(f, Finding::MissingInverse { .. })).unwrap();
-        let fix = block_on(ws.suggest_fix(mi)).unwrap().expect("safely fixable");
+        let mi = findings
+            .iter()
+            .find(|f| matches!(f, Finding::MissingInverse { .. }))
+            .unwrap();
+        let fix = block_on(ws.suggest_fix(mi))
+            .unwrap()
+            .expect("safely fixable");
         assert!(
             matches!(&fix, Fix::AddInverse { doc, relation, parent, .. }
                 if doc == &PathBuf::from("a.md") && relation == "part_of"
@@ -1350,7 +1599,11 @@ mod tests {
 
         block_on(ws.apply_fix(&fix)).unwrap();
         // a.md now declares the back-link (plain-canonical), and it validates.
-        assert!(std::fs::read_to_string(dir.join("a.md")).unwrap().contains("part_of: index.md"));
+        assert!(
+            std::fs::read_to_string(dir.join("a.md"))
+                .unwrap()
+                .contains("part_of: index.md")
+        );
         assert_eq!(block_on(ws.check("index.md")).unwrap(), vec![]);
     }
 
@@ -1360,9 +1613,16 @@ mod tests {
         // workspace's declared style (markdown-root, titled with the parent's
         // own title) — never a bare fifth style colophon invented.
         let dir = tempdir("autofix-style");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- '[A](/a.md)'\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- '[A](/a.md)'\n---\n",
+        );
         write(&dir, "a.md", "---\ntitle: A\n---\n");
-        let mut ws = Workspace::builder(StdFs).root(&dir).link_style(LinkStyle::MarkdownRoot).build();
+        let mut ws = Workspace::builder(StdFs)
+            .root(&dir)
+            .link_style(LinkStyle::MarkdownRoot)
+            .build();
 
         let findings = block_on(ws.check("index.md")).unwrap();
         let mi = findings
@@ -1375,7 +1635,9 @@ mod tests {
         // Applied in the workspace's markdown-root style, titled with the
         // parent's own title.
         assert!(
-            std::fs::read_to_string(dir.join("a.md")).unwrap().contains("[Home](/index.md)"),
+            std::fs::read_to_string(dir.join("a.md"))
+                .unwrap()
+                .contains("[Home](/index.md)"),
             "{:?}",
             std::fs::read_to_string(dir.join("a.md"))
         );
@@ -1386,7 +1648,11 @@ mod tests {
         // Obsidian-style: the repair is authored by id (registering the parent),
         // so it survives a later move untouched.
         let dir = tempdir("autofix-id");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- a.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- a.md\n---\n",
+        );
         write(&dir, "a.md", "---\ntitle: A\n---\n");
         let mut ws = Workspace::builder(StdFs)
             .root(&dir)
@@ -1404,7 +1670,10 @@ mod tests {
         let fix = block_on(ws.suggest_fix(&mi)).unwrap().unwrap();
         block_on(ws.apply_fix(&fix)).unwrap();
 
-        let parent_id = ws.index().id_for_path(Path::new("index.md")).expect("parent registered");
+        let parent_id = ws
+            .index()
+            .id_for_path(Path::new("index.md"))
+            .expect("parent registered");
         assert!(
             std::fs::read_to_string(dir.join("a.md"))
                 .unwrap()
@@ -1430,16 +1699,20 @@ mod tests {
 
         // Registry agrees with the frontmatter → nothing to reconcile.
         let mut ws = build();
-        ws.index_mut().register(&Id("aaaaaaa".into()), Path::new("index.md"));
+        ws.index_mut()
+            .register(&Id("aaaaaaa".into()), Path::new("index.md"));
         let clean = block_on(ws.check("index.md")).unwrap();
         assert!(
-            !clean.iter().any(|f| matches!(f, Finding::IdMismatch { .. })),
+            !clean
+                .iter()
+                .any(|f| matches!(f, Finding::IdMismatch { .. })),
             "agreeing id should not flag: {clean:?}"
         );
 
         // Registry records a *different* id for this path → mismatch surfaced.
         let mut ws = build();
-        ws.index_mut().register(&Id("bbbbbbb".into()), Path::new("index.md"));
+        ws.index_mut()
+            .register(&Id("bbbbbbb".into()), Path::new("index.md"));
         let findings = block_on(ws.check("index.md")).unwrap();
         assert!(
             findings.iter().any(|f| matches!(f,
@@ -1449,12 +1722,23 @@ mod tests {
         );
 
         // Trust-the-registry fix rewrites the frontmatter to the registry's id.
-        let mi = findings.iter().find(|f| matches!(f, Finding::IdMismatch { .. })).unwrap().clone();
+        let mi = findings
+            .iter()
+            .find(|f| matches!(f, Finding::IdMismatch { .. }))
+            .unwrap()
+            .clone();
         let fix = block_on(ws.suggest_fix(&mi)).unwrap().unwrap();
         assert!(matches!(&fix, Fix::SetId { id, .. } if id.0 == "bbbbbbb"));
         block_on(ws.apply_fix(&fix)).unwrap();
-        assert!(std::fs::read_to_string(dir.join("index.md")).unwrap().contains("id: bbbbbbb"));
-        assert!(block_on(ws.check("index.md")).unwrap().is_empty(), "reconciled → clean");
+        assert!(
+            std::fs::read_to_string(dir.join("index.md"))
+                .unwrap()
+                .contains("id: bbbbbbb")
+        );
+        assert!(
+            block_on(ws.check("index.md")).unwrap().is_empty(),
+            "reconciled → clean"
+        );
     }
 
     #[test]
@@ -1482,8 +1766,14 @@ mod tests {
         let fix = block_on(ws.suggest_fix(&f)).unwrap().unwrap();
         assert!(matches!(&fix, Fix::RegisterId { id, .. } if id.0 == "aaaaaaa"));
         block_on(ws.apply_fix(&fix)).unwrap();
-        assert_eq!(ws.index().id_for_path(Path::new("index.md")), Some(Id("aaaaaaa".into())));
-        assert!(block_on(ws.check("index.md")).unwrap().is_empty(), "adopted → clean");
+        assert_eq!(
+            ws.index().id_for_path(Path::new("index.md")),
+            Some(Id("aaaaaaa".into()))
+        );
+        assert!(
+            block_on(ws.check("index.md")).unwrap().is_empty(),
+            "adopted → clean"
+        );
     }
 
     #[test]
@@ -1498,8 +1788,14 @@ mod tests {
         let ws = Workspace::builder(StdFs).root(&dir).build();
 
         let findings = block_on(ws.check("index.md")).unwrap();
-        let mi = findings.iter().find(|f| matches!(f, Finding::MissingInverse { .. })).unwrap();
-        assert!(block_on(ws.suggest_fix(mi)).unwrap().is_none(), "contested → not auto-fixed");
+        let mi = findings
+            .iter()
+            .find(|f| matches!(f, Finding::MissingInverse { .. }))
+            .unwrap();
+        assert!(
+            block_on(ws.suggest_fix(mi)).unwrap().is_none(),
+            "contested → not auto-fixed"
+        );
     }
 
     #[test]
@@ -1508,12 +1804,24 @@ mod tests {
         // diagnosis only — autofix must not offer to edit prose.
         let dir = tempdir("autofix-body");
         // A nested list comprehension: `[[…]]` that is code, not a wikilink.
-        write(&dir, "index.md", "---\ntitle: Root\n---\ndp = [[inf] * n for _ in range(m)]]\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\n---\ndp = [[inf] * n for _ in range(m)]]\n",
+        );
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
         let broken = findings
             .iter()
-            .find(|f| matches!(f, Finding::BrokenLink { site: LinkSite::Body(_), .. }))
+            .find(|f| {
+                matches!(
+                    f,
+                    Finding::BrokenLink {
+                        site: LinkSite::Body(_),
+                        ..
+                    }
+                )
+            })
             .expect("the code fragment scanned as a broken body link");
         assert!(block_on(ws.suggest_fix(broken)).unwrap().is_none());
     }
@@ -1526,13 +1834,19 @@ mod tests {
         // signal.
         write(&dir, "index.md", "---\ncontents:\n- a.md\n---\n");
         write(&dir, "a.md", "---\npart_of: index.md\n---\n");
-        write(&dir, "loose.md", "---\ntitle: Loose\n---\njust sitting here\n");
+        write(
+            &dir,
+            "loose.md",
+            "---\ntitle: Loose\n---\njust sitting here\n",
+        );
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
 
         // loose.md is flagged…
         assert!(
-            findings.iter().any(|f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("loose.md"))),
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("loose.md"))),
             "{findings:?}"
         );
         // …but the linked files (root + reachable child) are not.
@@ -1554,7 +1868,11 @@ mod tests {
         write(&dir, "vendor/other.md", "---\ntitle: Vendored\n---\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
-        assert_eq!(findings, vec![], "an unlinked subdirectory yields no findings: {findings:?}");
+        assert_eq!(
+            findings,
+            vec![],
+            "an unlinked subdirectory yields no findings: {findings:?}"
+        );
     }
 
     #[test]
@@ -1568,7 +1886,9 @@ mod tests {
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
         assert!(
-            findings.iter().any(|f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("notes/stray.md"))),
+            findings.iter().any(
+                |f| matches!(f, Finding::Orphan { doc } if doc == &PathBuf::from("notes/stray.md"))
+            ),
             "a stray file in a reached directory is an orphan: {findings:?}"
         );
     }
@@ -1584,7 +1904,9 @@ mod tests {
         let findings = block_on(ws.check("index.md")).unwrap();
 
         assert!(
-            findings.iter().any(|f| matches!(f, Finding::CaseMismatch { .. })),
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::CaseMismatch { .. })),
             "{findings:?}"
         );
         assert!(
@@ -1597,12 +1919,18 @@ mod tests {
     fn duplicate_containment_is_found() {
         let dir = tempdir("dup");
         write(&dir, "index.md", "---\ncontents:\n- a.md\n- b.md\n---\n");
-        write(&dir, "a.md", "---\npart_of: index.md\ncontents:\n- b.md\n---\n");
+        write(
+            &dir,
+            "a.md",
+            "---\npart_of: index.md\ncontents:\n- b.md\n---\n",
+        );
         write(&dir, "b.md", "---\npart_of: index.md\n---\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let findings = block_on(ws.check("index.md")).unwrap();
         assert!(
-            findings.iter().any(|f| matches!(f, Finding::DuplicateContainment { .. })),
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::DuplicateContainment { .. })),
             "{findings:?}"
         );
     }
@@ -1614,25 +1942,50 @@ mod tests {
         // stamp → verify → out-of-band body edit is caught → restamp re-blesses.
         use crate::config::Fixity;
         let dir = tempdir("fixity-body");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- note.md\n---\n");
-        write(&dir, "note.md", "---\ntitle: Note\npart_of: index.md\n---\nhello world\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- note.md\n---\n",
+        );
+        write(
+            &dir,
+            "note.md",
+            "---\ntitle: Note\npart_of: index.md\n---\nhello world\n",
+        );
 
-        let mut w = Workspace::builder(StdFs).root(&dir).fixity(Fixity::Full).build();
+        let mut w = Workspace::builder(StdFs)
+            .root(&dir)
+            .fixity(Fixity::Full)
+            .build();
 
         // The document earns a body hash; restamping unchanged bytes is a no-op.
-        assert!(block_on(w.restamp_fixity("note.md")).unwrap(), "first stamp records a hash");
-        assert!(!block_on(w.restamp_fixity("note.md")).unwrap(), "restamp of unchanged bytes writes nothing");
-        assert!(std::fs::read_to_string(dir.join("note.md")).unwrap().contains("content_hash: sha256:"));
+        assert!(
+            block_on(w.restamp_fixity("note.md")).unwrap(),
+            "first stamp records a hash"
+        );
+        assert!(
+            !block_on(w.restamp_fixity("note.md")).unwrap(),
+            "restamp of unchanged bytes writes nothing"
+        );
+        assert!(
+            std::fs::read_to_string(dir.join("note.md"))
+                .unwrap()
+                .contains("content_hash: sha256:")
+        );
         assert_eq!(block_on(w.check("index.md")).unwrap(), vec![]);
 
         // Edit the body out-of-band (bypassing `colophon edit`) — check catches it.
         let stamped = std::fs::read_to_string(dir.join("note.md")).unwrap();
-        std::fs::write(dir.join("note.md"), stamped.replace("hello world", "goodbye world")).unwrap();
+        std::fs::write(
+            dir.join("note.md"),
+            stamped.replace("hello world", "goodbye world"),
+        )
+        .unwrap();
         let findings = block_on(w.check("index.md")).unwrap();
         assert!(
-            findings
-                .iter()
-                .any(|f| matches!(f, Finding::FixityMismatch { doc, .. } if doc == Path::new("note.md"))),
+            findings.iter().any(
+                |f| matches!(f, Finding::FixityMismatch { doc, .. } if doc == Path::new("note.md"))
+            ),
             "an out-of-band body edit must be caught: {findings:?}"
         );
 
@@ -1645,14 +1998,28 @@ mod tests {
     fn record_content_update_stamps_the_timestamp_field_and_the_hash_together() {
         use crate::config::Fixity;
         let dir = tempdir("content-update");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- note.md\n---\n");
-        write(&dir, "note.md", "---\ntitle: Note\npart_of: index.md\n---\nbody\n");
-        let mut w = Workspace::builder(StdFs).root(&dir).fixity(Fixity::Full).build();
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- note.md\n---\n",
+        );
+        write(
+            &dir,
+            "note.md",
+            "---\ntitle: Note\npart_of: index.md\n---\nbody\n",
+        );
+        let mut w = Workspace::builder(StdFs)
+            .root(&dir)
+            .fixity(Fixity::Full)
+            .build();
 
         // A content edit at a caller-supplied instant: both the `updated` field
         // (the client's chosen name + RFC-3339 value) and the body hash land in
         // one write.
-        assert!(block_on(w.record_content_update("note.md", Some(("updated", "2026-07-16T10:00:00Z")))).unwrap());
+        assert!(
+            block_on(w.record_content_update("note.md", Some(("updated", "2026-07-16T10:00:00Z"))))
+                .unwrap()
+        );
         let text = std::fs::read_to_string(dir.join("note.md")).unwrap();
         assert!(text.contains("updated: 2026-07-16T10:00:00Z"), "{text}");
         assert!(text.contains("content_hash: sha256:"), "{text}");
@@ -1660,8 +2027,15 @@ mod tests {
 
         // The library never reads a clock: the exact string it is handed is what
         // it writes (DESIGN §2 — the client produces the instant).
-        assert!(block_on(w.record_content_update("note.md", Some(("updated", "2099-01-01T00:00:00Z")))).unwrap());
-        assert!(std::fs::read_to_string(dir.join("note.md")).unwrap().contains("updated: 2099-01-01T00:00:00Z"));
+        assert!(
+            block_on(w.record_content_update("note.md", Some(("updated", "2099-01-01T00:00:00Z"))))
+                .unwrap()
+        );
+        assert!(
+            std::fs::read_to_string(dir.join("note.md"))
+                .unwrap()
+                .contains("updated: 2099-01-01T00:00:00Z")
+        );
     }
 
     #[test]
@@ -1670,13 +2044,32 @@ mod tests {
         // with no checksums at all (and writes no content_hash then).
         use crate::config::Fixity;
         let dir = tempdir("content-update-nofix");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- note.md\n---\n");
-        write(&dir, "note.md", "---\ntitle: Note\npart_of: index.md\n---\nbody\n");
-        let mut w = Workspace::builder(StdFs).root(&dir).fixity(Fixity::Off).build();
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- note.md\n---\n",
+        );
+        write(
+            &dir,
+            "note.md",
+            "---\ntitle: Note\npart_of: index.md\n---\nbody\n",
+        );
+        let mut w = Workspace::builder(StdFs)
+            .root(&dir)
+            .fixity(Fixity::Off)
+            .build();
 
-        assert!(block_on(w.record_content_update("note.md", Some(("modified", "2026-07-16T10:00:00Z")))).unwrap());
+        assert!(
+            block_on(
+                w.record_content_update("note.md", Some(("modified", "2026-07-16T10:00:00Z")))
+            )
+            .unwrap()
+        );
         let text = std::fs::read_to_string(dir.join("note.md")).unwrap();
         assert!(text.contains("modified: 2026-07-16T10:00:00Z"), "{text}");
-        assert!(!text.contains("content_hash"), "fixity off records no hash: {text}");
+        assert!(
+            !text.contains("content_hash"),
+            "fixity off records no hash: {text}"
+        );
     }
 }

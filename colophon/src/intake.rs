@@ -104,7 +104,9 @@ pub struct PlanOutcome {
 /// scope.
 fn existing_node(files: &[PathBuf]) -> Option<PathBuf> {
     let stem_is = |p: &Path, want: &str| {
-        p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case(want))
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case(want))
     };
     files
         .iter()
@@ -126,7 +128,8 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     pub async fn plan_mirror(&self, root_doc: &Path) -> Result<StructurePlan> {
         let root_doc = link::normalize(root_doc);
         let (_, root) = self.load(&root_doc).await?;
-        if root.content_attr().is_some() || matches!(root.carrier, Some(MetaCarrier::WholeFile(_))) {
+        if root.content_attr().is_some() || matches!(root.carrier, Some(MetaCarrier::WholeFile(_)))
+        {
             return Err(Error::Structure(
                 "mirror import needs a combined-document root (folder-notes inherit its \
                  grammar); re-run with flat adoption instead"
@@ -134,7 +137,11 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
             ));
         }
         // Folder-notes are minted in the root's own content grammar.
-        let ext = root_doc.extension().and_then(|e| e.to_str()).unwrap_or("md").to_string();
+        let ext = root_doc
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("md")
+            .to_string();
 
         // Every content document, minus the root itself (neither is loose content
         // to re-file).
@@ -174,7 +181,10 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                     node.insert(dir.clone(), n);
                 }
                 None => {
-                    node.insert(dir.clone(), link::normalize(dir.join(format!("index.{ext}"))));
+                    node.insert(
+                        dir.clone(),
+                        link::normalize(dir.join(format!("index.{ext}"))),
+                    );
                     synth_dirs.insert(dir.clone());
                 }
             }
@@ -209,12 +219,18 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
             let n = &node[dir];
             for file in dir_files {
                 if file != n {
-                    adoptions.push(Adoption { child: file.clone(), parent: n.clone() });
+                    adoptions.push(Adoption {
+                        child: file.clone(),
+                        parent: n.clone(),
+                    });
                 }
             }
         }
 
-        Ok(StructurePlan { synthesized, adoptions })
+        Ok(StructurePlan {
+            synthesized,
+            adoptions,
+        })
     }
 }
 
@@ -230,7 +246,8 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         for synth in &plan.synthesized {
             // Title the stub after its folder (not its `index` stem), so its own
             // title and the parent's spanning-entry label are authored in step.
-            self.create_titled(&synth.path, &synth.parent, Some(&synth.title)).await?;
+            self.create_titled(&synth.path, &synth.parent, Some(&synth.title))
+                .await?;
             outcome.synthesized.push(synth.path.clone());
         }
         for edge in &plan.adoptions {
@@ -260,7 +277,8 @@ mod tests {
     }
 
     fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("colophon-intake-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("colophon-intake-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -285,10 +303,12 @@ mod tests {
         assert_eq!(plan.synthesized[0].parent, PathBuf::from("index.md"));
         assert_eq!(plan.synthesized[0].title, "Notes");
         // Both files adopt under the (to-be-created) folder-note.
-        assert!(plan.adoptions.iter().any(|a| a.child == PathBuf::from("notes/one.md")
-            && a.parent == PathBuf::from("notes/index.md")));
-        assert!(plan.adoptions.iter().any(|a| a.child == PathBuf::from("notes/two.md")
-            && a.parent == PathBuf::from("notes/index.md")));
+        assert!(plan.adoptions.iter().any(
+            |a| a.child == Path::new("notes/one.md") && a.parent == Path::new("notes/index.md")
+        ));
+        assert!(plan.adoptions.iter().any(
+            |a| a.child == Path::new("notes/two.md") && a.parent == Path::new("notes/index.md")
+        ));
 
         let outcome = block_on(ws(&dir).apply_plan(&plan)).unwrap();
         assert_eq!(outcome.synthesized, vec![PathBuf::from("notes/index.md")]);
@@ -306,9 +326,15 @@ mod tests {
             "root's contents entry uses the folder title as its label: {}",
             read(&dir, "index.md")
         );
-        assert!(folder.contains("one.md") && folder.contains("two.md"), "{folder}");
+        assert!(
+            folder.contains("one.md") && folder.contains("two.md"),
+            "{folder}"
+        );
         // Files keep their bodies and gain part_of up to the folder-note.
-        assert!(read(&dir, "notes/one.md").contains("first"), "body preserved");
+        assert!(
+            read(&dir, "notes/one.md").contains("first"),
+            "body preserved"
+        );
         // The whole imported tree validates — nothing orphaned, no missing inverse.
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
@@ -319,20 +345,40 @@ mod tests {
         // rather than minting a competitor.
         let dir = tempdir("mirror-existing");
         write(&dir, "index.md", "---\ntitle: Home\n---\n");
-        write(&dir, "notes/index.md", "---\ntitle: Notes Home\n---\nfolder intro\n");
+        write(
+            &dir,
+            "notes/index.md",
+            "---\ntitle: Notes Home\n---\nfolder intro\n",
+        );
         write(&dir, "notes/leaf.md", "---\ntitle: Leaf\n---\nleaf\n");
 
         let plan = block_on(ws(&dir).plan_mirror(Path::new("index.md"))).unwrap();
-        assert!(plan.synthesized.is_empty(), "existing index means nothing to synthesize");
+        assert!(
+            plan.synthesized.is_empty(),
+            "existing index means nothing to synthesize"
+        );
         // The existing folder index adopts under the root; the leaf adopts under it.
-        assert!(plan.adoptions.iter().any(|a| a.child == PathBuf::from("notes/index.md")
-            && a.parent == PathBuf::from("index.md")));
-        assert!(plan.adoptions.iter().any(|a| a.child == PathBuf::from("notes/leaf.md")
-            && a.parent == PathBuf::from("notes/index.md")));
+        assert!(
+            plan.adoptions.iter().any(
+                |a| a.child == Path::new("notes/index.md") && a.parent == Path::new("index.md")
+            )
+        );
+        assert!(
+            plan.adoptions
+                .iter()
+                .any(|a| a.child == Path::new("notes/leaf.md")
+                    && a.parent == Path::new("notes/index.md"))
+        );
 
         block_on(ws(&dir).apply_plan(&plan)).unwrap();
-        assert!(read(&dir, "notes/index.md").contains("folder intro"), "existing index body kept");
-        assert!(read(&dir, "notes/index.md").contains("title: Notes Home"), "existing title kept");
+        assert!(
+            read(&dir, "notes/index.md").contains("folder intro"),
+            "existing index body kept"
+        );
+        assert!(
+            read(&dir, "notes/index.md").contains("title: Notes Home"),
+            "existing title kept"
+        );
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 
@@ -347,11 +393,20 @@ mod tests {
         let plan = block_on(ws(&dir).plan_mirror(Path::new("index.md"))).unwrap();
         // Two synthesized nodes, shallower first.
         let synth: Vec<_> = plan.synthesized.iter().map(|n| n.path.clone()).collect();
-        assert_eq!(synth, vec![PathBuf::from("a/index.md"), PathBuf::from("a/b/index.md")]);
+        assert_eq!(
+            synth,
+            vec![PathBuf::from("a/index.md"), PathBuf::from("a/b/index.md")]
+        );
 
         block_on(ws(&dir).apply_plan(&plan)).unwrap();
-        assert!(read(&dir, "a/index.md").contains("a/b/index.md"), "a contains a/b");
-        assert!(read(&dir, "a/b/index.md").contains("deep.md"), "a/b contains the leaf");
+        assert!(
+            read(&dir, "a/index.md").contains("a/b/index.md"),
+            "a contains a/b"
+        );
+        assert!(
+            read(&dir, "a/b/index.md").contains("deep.md"),
+            "a/b contains the leaf"
+        );
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 
@@ -371,8 +426,14 @@ mod tests {
 
         // The document folded in; neither binary got a sidecar.
         assert!(read(&dir, "notes/index.md").contains("one.md"));
-        assert!(!dir.join("cover.jpg.yaml").exists(), "no sidecar for the image");
-        assert!(!dir.join("src/index.md").exists(), "an all-code directory gets no folder-note");
+        assert!(
+            !dir.join("cover.jpg.yaml").exists(),
+            "no sidecar for the image"
+        );
+        assert!(
+            !dir.join("src/index.md").exists(),
+            "an all-code directory gets no folder-note"
+        );
         // The binaries are simply not colophon's concern — check is clean, no orphan.
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }

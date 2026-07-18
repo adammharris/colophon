@@ -79,7 +79,7 @@ colophon:
   updated: modified           # name of the machine-maintained timestamp field (omit/"" = off)
 
   # ── policy: how colophon behaves (conventionally in colophon.yaml) ──
-  identity: lazy              # none | lazy | eager
+  identity: lazy              # none (a.k.a. off) | lazy | eager
   fixity: all                # off | attachments | all
   recycle_bin: true          # bool — route delete to the recoverable bin
 ```
@@ -126,7 +126,7 @@ applies to path targets only.
 | `embed_type` | `metadata.embed` | grouped |
 | `id_storage: frontmatter` (meant *both*) | `id_storage: both` | names the actual homes |
 | `id_storage: frontmatter_only` | `id_storage: frontmatter` | frontmatter is the sole home |
-| `identity: off` | `identity: none` | clearer |
+| `identity: off` | `identity: none` | clearer — `off` still accepted as a synonym |
 | `fixity: payloads` | `fixity: attachments` | says what it covers |
 | `fixity: full` | `fixity: all` | attachments + bodies |
 | `updated_field: modified` | `updated: modified` | reframed as "this field is machine-maintained" |

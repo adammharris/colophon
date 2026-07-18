@@ -86,11 +86,23 @@ pub struct Registration {
 
 impl Registration {
     /// Never register — identity is effectively off.
-    pub const OFF: Self = Self { on_create: false, on_link: false, on_publish: false };
+    pub const OFF: Self = Self {
+        on_create: false,
+        on_link: false,
+        on_publish: false,
+    };
     /// Register only on a durable reference (link-by-id or publish). Recommended.
-    pub const LAZY: Self = Self { on_create: false, on_link: true, on_publish: true };
+    pub const LAZY: Self = Self {
+        on_create: false,
+        on_link: true,
+        on_publish: true,
+    };
     /// Register every document the moment it is created.
-    pub const EAGER: Self = Self { on_create: true, on_link: true, on_publish: true };
+    pub const EAGER: Self = Self {
+        on_create: true,
+        on_link: true,
+        on_publish: true,
+    };
 
     /// Whether any trigger is active.
     pub fn is_active(&self) -> bool {

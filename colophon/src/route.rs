@@ -229,10 +229,7 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     ) -> Result<RoutePlan> {
         let start = link::normalize(start);
         if !self.fs().try_exists(&self.root().join(&start)).await? {
-            return Err(Error::Structure(format!(
-                "{} does not exist",
-                start.display()
-            )));
+            return Err(Error::NotFound(start.clone()));
         }
         // Synthesized nodes are minted in the start document's grammar.
         let ext = start

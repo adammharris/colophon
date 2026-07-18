@@ -50,6 +50,7 @@ pub mod attach;
 pub mod change;
 pub mod config;
 pub mod content;
+pub mod discovery;
 pub mod document;
 pub mod edit;
 pub mod error;
@@ -72,23 +73,24 @@ pub mod workspace;
 
 pub use change::{ChangeSet, FileOp};
 pub use config::{
-    ConfigIssue, ConfigIssueKind, Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig, diagnose,
-    spec_ahead,
+    ConfigIssue, ConfigIssueKind, Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig,
+    diagnose, spec_ahead,
 };
 pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
+pub use discovery::{Discovered, Discovery, discover};
 pub use document::{Document, EmbedStyle, EmbedType, embed_carrier, is_opaque_payload};
 pub use error::{Error, Result};
 pub use exec::block_on;
 pub use fig::Format;
-pub use fs::{Capabilities, Storage, StdFs};
+pub use fs::{Capabilities, StdFs, Storage};
 pub use identity::{Id, IdentityPolicy, Minter, Registration, Trigger};
 pub use index::{FileIndex, InMemoryIndex, IndexStore, NoIndex};
 pub use intake::{Adoption, PlanOutcome, StructurePlan, SynthNode};
 pub use journal::{Recovered, recover};
 pub use link::{
     Addressing, BodyLink, Link, LinkStyle, Notation, PathStyle, ReferenceStyle, Wikilink, Wrapper,
-    format_link, path_to_title,
+    escapes_root, format_link, path_to_title,
 };
 pub use meta::{Mapping, Value};
 pub use mutate::Created;

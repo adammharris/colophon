@@ -36,10 +36,12 @@ mod tests {
 
     #[test]
     fn drives_chained_storage_futures() {
-        use crate::fs::{Storage, StdFs};
+        use crate::fs::{StdFs, Storage};
         let exists = block_on(async {
-            StdFs.try_exists(std::path::Path::new("/definitely/not/here")).await
+            StdFs
+                .try_exists(std::path::Path::new("/definitely/not/here"))
+                .await
         });
-        assert_eq!(exists.unwrap(), false);
+        assert!(!exists.unwrap());
     }
 }

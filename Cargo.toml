@@ -5,7 +5,10 @@ members = ["colophon", "colophon-cli"]
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
+# Minimum supported Rust version. Edition 2024 needs 1.85, but the crate also uses
+# `if let … && let …` let-chains in stable positions, stabilized in 1.88 — so 1.88
+# is the true floor, enforced by the `msrv` CI job (which reads this very value).
+rust-version = "1.88"
 repository = "https://github.com/adammharris/colophon"
 homepage = "https://github.com/adammharris/colophon"
 readme = "README.md"

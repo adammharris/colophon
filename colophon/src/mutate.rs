@@ -153,10 +153,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         // Refuse if either file (the node, or a separated body) already exists.
         for existing in std::iter::once(&node).chain(body.iter()) {
             if self.fs().try_exists(&self.root().join(existing)).await? {
-                return Err(Error::Structure(format!(
-                    "{} already exists",
-                    existing.display()
-                )));
+                return Err(Error::AlreadyExists(existing.to_path_buf()));
             }
         }
 
@@ -279,10 +276,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
 
         for existing in [&child, &parent] {
             if !self.fs().try_exists(&self.root().join(existing)).await? {
-                return Err(Error::Structure(format!(
-                    "{} does not exist",
-                    existing.display()
-                )));
+                return Err(Error::NotFound(existing.to_path_buf()));
             }
         }
 
@@ -413,10 +407,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let (spanning, inverse) = self.spanning_pair()?;
         for existing in [&child, &parent] {
             if !self.fs().try_exists(&self.root().join(existing)).await? {
-                return Err(Error::Structure(format!(
-                    "{} does not exist",
-                    existing.display()
-                )));
+                return Err(Error::NotFound(existing.to_path_buf()));
             }
         }
 
@@ -544,13 +535,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let to = link::normalize(to);
 
         if !self.fs().try_exists(&self.root().join(&from)).await? {
-            return Err(Error::Structure(format!(
-                "{} does not exist",
-                from.display()
-            )));
+            return Err(Error::NotFound(from.to_path_buf()));
         }
         if self.fs().try_exists(&self.root().join(&to)).await? {
-            return Err(Error::Structure(format!("{} already exists", to.display())));
+            return Err(Error::AlreadyExists(to.to_path_buf()));
         }
         let (from_text, from_doc) = self.load(&from).await?;
         let mut cs = self.change();
@@ -829,7 +817,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let bin_index = existing_index
             .clone()
             .unwrap_or_else(|| PathBuf::from("recyclebin").join(format!("index.{ext}")));
-        let bin_dir = bin_index.parent().unwrap_or(Path::new("recyclebin")).to_path_buf();
+        let bin_dir = bin_index
+            .parent()
+            .unwrap_or(Path::new("recyclebin"))
+            .to_path_buf();
         let items_dir = bin_dir.join("items");
 
         // The bin index's current records (and its own title/`part_of`, so a
@@ -857,7 +848,11 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                     .unwrap_or_else(|| link::relative(&bin_dir, &root));
                 (recs, title, part_of)
             }
-            None => (Vec::new(), "Recycle Bin".to_string(), link::relative(&bin_dir, &root)),
+            None => (
+                Vec::new(),
+                "Recycle Bin".to_string(),
+                link::relative(&bin_dir, &root),
+            ),
         };
 
         // Where the bytes go: mirror the original path under the (unreached)
@@ -865,7 +860,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let mut node_bin = items_dir.join(&path);
         let mut bump = 1;
         while self.fs().try_exists(&self.root().join(&node_bin)).await? {
-            let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
             node_bin = items_dir
                 .join(path.parent().unwrap_or(Path::new("")))
                 .join(format!("{name}.{bump}"));
@@ -894,14 +892,29 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         if let Some(id) = &id_opt {
             record.insert("id".into(), Value::String(id.to_string()));
         }
-        record.insert("from".into(), Value::String(path.to_string_lossy().into_owned()));
-        record.insert("bin".into(), Value::String(node_bin.to_string_lossy().into_owned()));
+        record.insert(
+            "from".into(),
+            Value::String(path.to_string_lossy().into_owned()),
+        );
+        record.insert(
+            "bin".into(),
+            Value::String(node_bin.to_string_lossy().into_owned()),
+        );
         if let Some(parent) = &parent {
-            record.insert("parent".into(), Value::String(parent.to_string_lossy().into_owned()));
+            record.insert(
+                "parent".into(),
+                Value::String(parent.to_string_lossy().into_owned()),
+            );
         }
         if let Some((from, to)) = &body_bin {
-            record.insert("body_from".into(), Value::String(from.to_string_lossy().into_owned()));
-            record.insert("body_bin".into(), Value::String(to.to_string_lossy().into_owned()));
+            record.insert(
+                "body_from".into(),
+                Value::String(from.to_string_lossy().into_owned()),
+            );
+            record.insert(
+                "body_bin".into(),
+                Value::String(to.to_string_lossy().into_owned()),
+            );
         }
         if let Some(at) = at {
             record.insert("at".into(), Value::String(at.to_string()));
@@ -1036,7 +1049,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         // The bin index without this record, re-rendered whole (a machine file).
         let mut remaining = records;
         remaining.remove(pos);
-        let bin_dir = bin_index.parent().unwrap_or(Path::new("recyclebin")).to_path_buf();
+        let bin_dir = bin_index
+            .parent()
+            .unwrap_or(Path::new("recyclebin"))
+            .to_path_buf();
         let format = self.default_embed_format();
         let mut bin_map = crate::meta::Mapping::new();
         bin_map.insert(
@@ -1083,14 +1099,20 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             && self.fs().try_exists(&self.root().join(parent)).await?
         {
             let (parent_text, parent_doc) = self.load(parent).await?;
-            let already = self.relations().children(&parent_doc.meta).iter().any(|t| {
-                self.resolve_link(parent, &Link::parse(t)) == Target::Path(from.clone())
-            });
+            let already =
+                self.relations().children(&parent_doc.meta).iter().any(|t| {
+                    self.resolve_link(parent, &Link::parse(t)) == Target::Path(from.clone())
+                });
             if !already {
-                let down = self.authored_target(&spanning, parent, &from, &title, false).await?;
+                let down = self
+                    .authored_target(&spanning, parent, &from, &title, false)
+                    .await?;
                 let mut editor = MetaEditor::open_or_init(&parent_text, parent_doc.carrier)?;
                 let span_path = [Segment::Key(&spanning)];
-                if editor.append_value(&span_path, fig::Value::Str(down.clone())).is_err() {
+                if editor
+                    .append_value(&span_path, fig::Value::Str(down.clone()))
+                    .is_err()
+                {
                     editor.set_value(&span_path, fig::Value::Seq(vec![fig::Value::Str(down)]))?;
                 }
                 cs.write(parent.clone(), editor.render()?);
@@ -1121,7 +1143,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .unwrap_or_default();
         let count = records.len();
 
-        let bin_dir = bin_index.parent().unwrap_or(Path::new("recyclebin")).to_path_buf();
+        let bin_dir = bin_index
+            .parent()
+            .unwrap_or(Path::new("recyclebin"))
+            .to_path_buf();
         let format = self.default_embed_format();
         let mut bin_map = crate::meta::Mapping::new();
         bin_map.insert(
@@ -1175,10 +1200,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     pub async fn separate(&mut self, path: &Path) -> Result<PathBuf> {
         let path = link::normalize(path);
         if !self.fs().try_exists(&self.root().join(&path)).await? {
-            return Err(Error::Structure(format!(
-                "{} does not exist",
-                path.display()
-            )));
+            return Err(Error::NotFound(path.to_path_buf()));
         }
         let (_, doc) = self.load(&path).await?;
         let Some(MetaCarrier::Fenced(kind)) = doc.carrier else {
@@ -1208,10 +1230,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             )));
         }
         if self.fs().try_exists(&self.root().join(&meta_path)).await? {
-            return Err(Error::Structure(format!(
-                "{} already exists",
-                meta_path.display()
-            )));
+            return Err(Error::AlreadyExists(meta_path.to_path_buf()));
         }
         let body_ref = path
             .file_name()
@@ -1336,10 +1355,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     pub async fn duplicate(&mut self, source: &Path) -> Result<PathBuf> {
         let source = link::normalize(source);
         if !self.fs().try_exists(&self.root().join(&source)).await? {
-            return Err(Error::Structure(format!(
-                "{} does not exist",
-                source.display()
-            )));
+            return Err(Error::NotFound(source.to_path_buf()));
         }
         let (source_text, doc) = self.load(&source).await?;
         let (spanning, inverse) = self.spanning_pair()?;
@@ -1485,10 +1501,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
     ) -> Result<usize> {
         let file = link::normalize(file);
         if !self.fs().try_exists(&self.root().join(&file)).await? {
-            return Err(Error::Structure(format!(
-                "{} does not exist",
-                file.display()
-            )));
+            return Err(Error::NotFound(file.to_path_buf()));
         }
         let targets = if recursive {
             self.spanning_subtree(&file).await?
@@ -3187,7 +3200,10 @@ mod tests {
     /// happened to think of.
     fn snapshot(dir: &Path) -> Vec<(String, String)> {
         fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {
-            let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
+            let mut entries: Vec<_> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap())
+                .collect();
             entries.sort_by_key(std::fs::DirEntry::path);
             for entry in entries {
                 let path = entry.path();
@@ -3195,7 +3211,10 @@ mod tests {
                     walk(&path, base, out);
                 } else {
                     out.push((
-                        path.strip_prefix(base).unwrap().to_string_lossy().into_owned(),
+                        path.strip_prefix(base)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
                         std::fs::read_to_string(&path).unwrap_or_default(),
                     ));
                 }
@@ -3208,7 +3227,9 @@ mod tests {
 
     /// A workspace over a backend that fails the `fail_at`th write.
     fn failing_ws(dir: &Path, fail_at: usize) -> Workspace<FailAtWrite> {
-        Workspace::builder(FailAtWrite::nth(fail_at)).root(dir).build()
+        Workspace::builder(FailAtWrite::nth(fail_at))
+            .root(dir)
+            .build()
     }
 
     fn linked_tree(tag: &str) -> PathBuf {
@@ -3218,7 +3239,11 @@ mod tests {
             "index.md",
             "---\ntitle: Root\ncontents:\n- a.md\n- b.md\n---\nbody\n",
         );
-        write(&dir, "a.md", "---\ntitle: A\npart_of: index.md\n---\nsee [[b]]\n");
+        write(
+            &dir,
+            "a.md",
+            "---\ntitle: A\npart_of: index.md\n---\nsee [[b]]\n",
+        );
         write(
             &dir,
             "b.md",
@@ -3234,7 +3259,11 @@ mod tests {
         // bytes are gone before any rollback could copy them. So the guard has to
         // be a refusal up front, alongside the check on the node's own path.
         let dir = tempdir("body-collision");
-        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- notes.yaml\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- notes.yaml\n---\n",
+        );
         write(
             &dir,
             "notes.yaml",
@@ -3246,13 +3275,19 @@ mod tests {
 
         let err = block_on(ws(&dir).rename(Path::new("notes.yaml"), Path::new("other.yaml")))
             .unwrap_err();
-        assert!(err.to_string().contains("other.md"), "should name the blocker: {err}");
+        assert!(
+            err.to_string().contains("other.md"),
+            "should name the blocker: {err}"
+        );
         assert_eq!(
             read(&dir, "other.md"),
             "PRECIOUS — must not be destroyed\n",
             "the move destroyed an unrelated document"
         );
-        assert!(dir.join("notes.yaml").exists(), "and the refused move changed nothing");
+        assert!(
+            dir.join("notes.yaml").exists(),
+            "and the refused move changed nothing"
+        );
     }
 
     #[test]
@@ -3267,7 +3302,11 @@ mod tests {
         let mut w = failing_ws(&dir, 1);
         let err = block_on(w.create(Path::new("a.md"), Path::new("index.md"))).unwrap_err();
         assert!(err.to_string().contains("disk full"), "{err}");
-        assert_eq!(snapshot(&dir), before, "a failed create left something behind");
+        assert_eq!(
+            snapshot(&dir),
+            before,
+            "a failed create left something behind"
+        );
     }
 
     #[test]
@@ -3285,7 +3324,10 @@ mod tests {
         let mut w = Workspace::builder(FailAtWrite::never()).root(&dir).build();
         block_on(w.rename(Path::new("a.md"), Path::new("sub/a.md"))).unwrap();
         let writes = w.fs().attempted();
-        assert!(writes >= 3, "expected the move, the parent and the sibling: {writes}");
+        assert!(
+            writes >= 3,
+            "expected the move, the parent and the sibling: {writes}"
+        );
 
         for fail_at in 0..writes {
             let dir = linked_tree("atomic-rename");
@@ -3307,8 +3349,16 @@ mod tests {
         // Three documents change, and the middle window is the dangerous one: the
         // child repointed at its new parent while the old parent still claims it.
         let dir = tempdir("atomic-reparent");
-        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- old.md\n- new.md\n---\n");
-        write(&dir, "old.md", "---\ntitle: Old\npart_of: index.md\ncontents:\n- kid.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- old.md\n- new.md\n---\n",
+        );
+        write(
+            &dir,
+            "old.md",
+            "---\ntitle: Old\npart_of: index.md\ncontents:\n- kid.md\n---\n",
+        );
         write(&dir, "new.md", "---\ntitle: New\npart_of: index.md\n---\n");
         write(&dir, "kid.md", "---\ntitle: Kid\npart_of: old.md\n---\n");
         let before = snapshot(&dir);
@@ -3319,7 +3369,11 @@ mod tests {
         let mut w = failing_ws(&dir, 2);
         let err = block_on(w.reparent(Path::new("kid.md"), Path::new("new.md"))).unwrap_err();
         assert!(err.to_string().contains("disk full"), "{err}");
-        assert_eq!(snapshot(&dir), before, "a failed reparent left the kid contained twice");
+        assert_eq!(
+            snapshot(&dir),
+            before,
+            "a failed reparent left the kid contained twice"
+        );
     }
 
     #[test]
@@ -3356,8 +3410,14 @@ mod tests {
             .build();
 
         block_on(w.create(Path::new("a.md"), Path::new("index.md"))).unwrap();
-        let a_id = w.index().id_for_path(Path::new("a.md")).expect("a.md registered");
-        let root_id = w.index().id_for_path(Path::new("index.md")).expect("root registered");
+        let a_id = w
+            .index()
+            .id_for_path(Path::new("a.md"))
+            .expect("a.md registered");
+        let root_id = w
+            .index()
+            .id_for_path(Path::new("index.md"))
+            .expect("root registered");
 
         block_on(w.create(Path::new("b.md"), Path::new("index.md"))).unwrap();
 
@@ -3373,7 +3433,10 @@ mod tests {
             Some(root_id),
             "the root was re-minted a second, different id"
         );
-        assert!(w.index().id_for_path(Path::new("b.md")).is_some(), "b.md registered");
+        assert!(
+            w.index().id_for_path(Path::new("b.md")).is_some(),
+            "b.md registered"
+        );
 
         // The authored links must actually resolve — the user-visible failure.
         let root_text = read(&dir, "index.md");
@@ -3441,7 +3504,8 @@ mod tests {
         // Exactly what an op that bailed after minting would leave behind.
         w.index_mut().checkpoint();
         let ghost = crate::identity::Id("ghostid".into());
-        w.index_mut().register(&ghost, Path::new("never-written.md"));
+        w.index_mut()
+            .register(&ghost, Path::new("never-written.md"));
         assert!(w.index().is_dirty(), "the abandoned op dirtied the store");
 
         // The next op unwinds it rather than staging it into its own registry.
@@ -3464,7 +3528,11 @@ mod tests {
         // away from, with all the records in it, while the file the root now
         // points at has none.
         let dir = tempdir("move-registry");
-        write(&dir, "index.md", "---\ntitle: Root\nregistry: registry.yaml\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\nregistry: registry.yaml\n---\n",
+        );
         let mut w = hosted_registry_ws(&dir, StdFs);
         // Give the registry document an id of its own, so the move dirties the
         // store and forces the registry write into the same set as the rename.
@@ -3499,7 +3567,11 @@ mod tests {
         let mut w = hosted_registry_ws(&dir, StdFs);
         // The registry document points back at the root, in a path form a move
         // must recompute.
-        write(&dir, "registry.yaml", "title: ID registry\npart_of: index.md\n");
+        write(
+            &dir,
+            "registry.yaml",
+            "title: ID registry\npart_of: index.md\n",
+        );
         let text = read(&dir, "registry.yaml");
         w.index_mut().set_host("registry.yaml", &text).unwrap();
         let root_id = block_on(w.register(Path::new("index.md"), Trigger::Link)).unwrap();
@@ -3542,7 +3614,11 @@ mod tests {
         // names the new path. Nothing else had to write it — no post-hoc save
         // step, which is the window this closes.
         let dir = tempdir("registry-with-docs");
-        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- a.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- a.md\n---\n",
+        );
         write(&dir, "a.md", "---\ntitle: A\npart_of: index.md\n---\n");
         let mut w = hosted_registry_ws(&dir, StdFs);
 
@@ -3554,8 +3630,14 @@ mod tests {
             registry.contains("moved.md") && !registry.contains(" a.md"),
             "the registry on disk should already name the new path: {registry}"
         );
-        assert!(registry.contains(id.as_str()), "the id should be recorded: {registry}");
-        assert!(!w.index().is_dirty(), "a staged registry write leaves the store clean");
+        assert!(
+            registry.contains(id.as_str()),
+            "the id should be recorded: {registry}"
+        );
+        assert!(
+            !w.index().is_dirty(),
+            "a staged registry write leaves the store clean"
+        );
     }
 
     #[test]
@@ -3571,7 +3653,11 @@ mod tests {
         // would silently stop testing that the day an op grows a write.
         let seed = |tag: &str| {
             let dir = tempdir(tag);
-            write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- a.md\n---\n");
+            write(
+                &dir,
+                "index.md",
+                "---\ntitle: Root\ncontents:\n- a.md\n---\n",
+            );
             write(&dir, "a.md", "---\ntitle: A\npart_of: index.md\n---\n");
             dir
         };
@@ -3596,7 +3682,10 @@ mod tests {
             let mut w = hosted_registry_ws(&dir, StdFs);
             let id = block_on(w.register(Path::new("a.md"), Trigger::Link)).unwrap();
             block_on(w.create(Path::new("settle.md"), Path::new("index.md"))).unwrap();
-            assert!(read(&dir, "registry.yaml").contains("a.md"), "registry seeded");
+            assert!(
+                read(&dir, "registry.yaml").contains("a.md"),
+                "registry seeded"
+            );
             let before = snapshot(&dir);
 
             // Rebuild over a backend that fails this run's `fail_at`th write,
@@ -3630,7 +3719,11 @@ mod tests {
     #[test]
     fn recycle_moves_a_document_into_the_bin_and_records_it() {
         let dir = tempdir("recycle-basic");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- note.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- note.md\n---\n",
+        );
         let original = "---\ntitle: My Note\npart_of: index.md\n---\nbody text\n";
         write(&dir, "note.md", original);
 
@@ -3646,7 +3739,10 @@ mod tests {
 
         // The parent no longer links it, and the root now links the bin.
         let index = read(&dir, "index.md");
-        assert!(!index.contains("- note.md"), "parent entry removed: {index}");
+        assert!(
+            !index.contains("- note.md"),
+            "parent entry removed: {index}"
+        );
         assert!(index.contains("recycle_bin"), "root links the bin: {index}");
 
         // The bin index records the deletion: title, origin, and timestamp.
@@ -3657,7 +3753,10 @@ mod tests {
 
         // And the workspace is still consistent — the binned doc is *not* an orphan.
         let findings = block_on(ws(&dir).check(Path::new("index.md"))).unwrap();
-        assert!(findings.is_empty(), "a recycle should leave check clean: {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "a recycle should leave check clean: {findings:?}"
+        );
     }
 
     #[test]
@@ -3665,7 +3764,11 @@ mod tests {
         // The round-trip is the whole promise: delete and restore return the
         // workspace to byte-identical state, parent link and all.
         let dir = tempdir("recycle-restore");
-        write(&dir, "index.md", "---\ntitle: Home\ncontents:\n- note.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Home\ncontents:\n- note.md\n---\n",
+        );
         let original = "---\ntitle: My Note\npart_of: index.md\n---\nbody text\n";
         write(&dir, "note.md", original);
 
@@ -3678,13 +3781,25 @@ mod tests {
         assert_eq!(read(&dir, "note.md"), original);
         // The parent links it again, and its record is gone from the bin.
         let index = read(&dir, "index.md");
-        assert!(index.contains("note.md"), "parent re-links the restored doc: {index}");
+        assert!(
+            index.contains("note.md"),
+            "parent re-links the restored doc: {index}"
+        );
         let bin = read(&dir, "recyclebin/index.yaml");
-        assert!(!bin.contains("My Note"), "the record is cleared on restore: {bin}");
-        assert!(!dir.join("recyclebin/items/note.md").exists(), "the binned bytes moved back");
+        assert!(
+            !bin.contains("My Note"),
+            "the record is cleared on restore: {bin}"
+        );
+        assert!(
+            !dir.join("recyclebin/items/note.md").exists(),
+            "the binned bytes moved back"
+        );
         // Consistent.
         let findings = block_on(ws(&dir).check(Path::new("index.md"))).unwrap();
-        assert!(findings.is_empty(), "a restore should leave check clean: {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "a restore should leave check clean: {findings:?}"
+        );
     }
 
     #[test]
@@ -3693,12 +3808,19 @@ mod tests {
         // without `force`, since binning it would strand them.
         let dir = tempdir("recycle-children");
         write(&dir, "index.md", "---\ncontents:\n- a.md\n---\n");
-        write(&dir, "a.md", "---\ntitle: A\npart_of: index.md\ncontents:\n- b.md\n---\n");
+        write(
+            &dir,
+            "a.md",
+            "---\ntitle: A\npart_of: index.md\ncontents:\n- b.md\n---\n",
+        );
         write(&dir, "b.md", "---\ntitle: B\npart_of: a.md\n---\n");
 
         let err = block_on(ws(&dir).recycle(Path::new("a.md"), false, None)).unwrap_err();
         assert!(err.to_string().contains("contains 1 document"), "{err}");
-        assert!(dir.join("a.md").exists(), "a refused recycle changes nothing");
+        assert!(
+            dir.join("a.md").exists(),
+            "a refused recycle changes nothing"
+        );
 
         block_on(ws(&dir).recycle(Path::new("a.md"), true, None)).unwrap();
         assert!(!dir.join("a.md").exists());
@@ -3718,12 +3840,19 @@ mod tests {
         block_on(ws(&dir).recycle(Path::new("b.md"), false, None)).unwrap();
 
         let bin = read(&dir, "recyclebin/index.yaml");
-        assert!(bin.contains("Aye") && bin.contains("Bee"), "both recorded: {bin}");
+        assert!(
+            bin.contains("Aye") && bin.contains("Bee"),
+            "both recorded: {bin}"
+        );
         assert!(dir.join("recyclebin/items/a.md").exists());
         assert!(dir.join("recyclebin/items/b.md").exists());
 
         let index = read(&dir, "index.md");
-        assert_eq!(index.matches("recycle_bin").count(), 1, "pointer authored once: {index}");
+        assert_eq!(
+            index.matches("recycle_bin").count(),
+            1,
+            "pointer authored once: {index}"
+        );
 
         let findings = block_on(ws(&dir).check(Path::new("index.md"))).unwrap();
         assert!(findings.is_empty(), "{findings:?}");
@@ -3756,13 +3885,21 @@ mod tests {
         // rolls back to exactly the starting state — nothing half-binned.
         let dir = tempdir("recycle-atomic");
         write(&dir, "index.md", "---\ncontents:\n- note.md\n---\n");
-        write(&dir, "note.md", "---\ntitle: Note\npart_of: index.md\n---\nbody\n");
+        write(
+            &dir,
+            "note.md",
+            "---\ntitle: Note\npart_of: index.md\n---\nbody\n",
+        );
         let before = snapshot(&dir);
 
         let mut w = Workspace::builder(FailAtWrite::nth(0)).root(&dir).build();
         let err = block_on(w.recycle(Path::new("note.md"), false, None)).unwrap_err();
         assert!(err.to_string().contains("disk full"), "{err}");
 
-        assert_eq!(snapshot(&dir), before, "a failed recycle tore the workspace");
+        assert_eq!(
+            snapshot(&dir),
+            before,
+            "a failed recycle tore the workspace"
+        );
     }
 }

@@ -330,39 +330,77 @@ impl WorkspaceConfig {
             .collect()
     }
 
+    /// Whether a *mutation* under this config could mint a new stable ID — so a
+    /// caller that will land one must bootstrap a registry document *first*
+    /// (before the change set that would otherwise strand the id→path map with no
+    /// home). Two ways an op mints: an **eager** identity policy stamps every
+    /// created document, and any **id-registering reference style** (the workspace
+    /// default, or a single relation's override — e.g. `part_of: id` in a split)
+    /// registers a link's target when a `link` fires.
+    ///
+    /// This is the single home for a judgment the CLI previously recomputed at
+    /// every mutation command (`new`, `attach`, `mv --in`, `reparent`,
+    /// `duplicate`, `init`'s adoption pass), each an identical copy of the same
+    /// three-line `link_registers && fires_on(Link) || fires_on(Create)` — the
+    /// kind of duplicated policy that drifts silently. It lives here because every
+    /// term it needs is a fact about the config.
+    pub fn mints_on_mutation(&self) -> bool {
+        let link_registers = self.reference_style().registers()
+            || self
+                .resolved_relation_styles()
+                .values()
+                .any(|s| s.registers());
+        (link_registers && self.identity.fires_on(crate::identity::Trigger::Link))
+            || self.identity.fires_on(crate::identity::Trigger::Create)
+    }
+
     /// Overlay the recognized keys present in `meta` onto this config; absent
     /// keys keep their current value. `meta` is either a root's `colophon:` block
     /// or a config document's top-level mapping — the same nested shape. Apply the
     /// root block first, then the config document, so the config document wins.
     pub fn apply(&mut self, meta: &Value) {
-        if let Some(v) =
-            meta.get("content_format").and_then(Value::as_str).and_then(ContentFormat::from_config_str)
+        if let Some(v) = meta
+            .get("content_format")
+            .and_then(Value::as_str)
+            .and_then(ContentFormat::from_config_str)
         {
             self.content_format = v;
         }
         if let Some(md) = meta.get("metadata") {
-            if let Some(v) = md.get("format").and_then(Value::as_str).and_then(format_from_str) {
+            if let Some(v) = md
+                .get("format")
+                .and_then(Value::as_str)
+                .and_then(format_from_str)
+            {
                 self.default_embed_format = v;
             }
-            if let Some(v) =
-                md.get("embed").and_then(Value::as_str).and_then(EmbedStyle::from_config_str)
+            if let Some(v) = md
+                .get("embed")
+                .and_then(Value::as_str)
+                .and_then(EmbedStyle::from_config_str)
             {
                 self.embed_style = v;
             }
         }
         if let Some(rf) = meta.get("references") {
-            if let Some(v) =
-                rf.get("notation").and_then(Value::as_str).and_then(Notation::from_config_str)
+            if let Some(v) = rf
+                .get("notation")
+                .and_then(Value::as_str)
+                .and_then(Notation::from_config_str)
             {
                 self.notation = v;
             }
-            if let Some(v) =
-                rf.get("path_style").and_then(Value::as_str).and_then(PathStyle::from_config_str)
+            if let Some(v) = rf
+                .get("path_style")
+                .and_then(Value::as_str)
+                .and_then(PathStyle::from_config_str)
             {
                 self.path_style = v;
             }
-            if let Some(v) =
-                rf.get("target").and_then(Value::as_str).and_then(Addressing::from_config_str)
+            if let Some(v) = rf
+                .get("target")
+                .and_then(Value::as_str)
+                .and_then(Addressing::from_config_str)
             {
                 self.reference_target = v;
             }
@@ -374,18 +412,24 @@ impl WorkspaceConfig {
         if let Some(relations) = meta.get("relations").and_then(Value::as_mapping) {
             for (name, spec) in relations {
                 let entry = self.relation_styles.entry(name.clone()).or_default();
-                if let Some(v) =
-                    spec.get("notation").and_then(Value::as_str).and_then(Notation::from_config_str)
+                if let Some(v) = spec
+                    .get("notation")
+                    .and_then(Value::as_str)
+                    .and_then(Notation::from_config_str)
                 {
                     entry.notation = Some(v);
                 }
-                if let Some(v) =
-                    spec.get("path_style").and_then(Value::as_str).and_then(PathStyle::from_config_str)
+                if let Some(v) = spec
+                    .get("path_style")
+                    .and_then(Value::as_str)
+                    .and_then(PathStyle::from_config_str)
                 {
                     entry.path_style = Some(v);
                 }
-                if let Some(v) =
-                    spec.get("target").and_then(Value::as_str).and_then(Addressing::from_config_str)
+                if let Some(v) = spec
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .and_then(Addressing::from_config_str)
                 {
                     entry.target = Some(v);
                 }
@@ -394,20 +438,27 @@ impl WorkspaceConfig {
                 }
             }
         }
-        if let Some(v) =
-            meta.get("id_storage").and_then(Value::as_str).and_then(IdStorage::from_config_str)
+        if let Some(v) = meta
+            .get("id_storage")
+            .and_then(Value::as_str)
+            .and_then(IdStorage::from_config_str)
         {
             self.id_storage = v;
         }
         if let Some(v) = meta.get("updated").and_then(Value::as_str) {
             self.updated = v.to_string();
         }
-        if let Some(v) =
-            meta.get("identity").and_then(Value::as_str).and_then(registration_from_str)
+        if let Some(v) = meta
+            .get("identity")
+            .and_then(Value::as_str)
+            .and_then(registration_from_str)
         {
             self.identity = v;
         }
-        if let Some(v) = meta.get("fixity").and_then(Value::as_str).and_then(Fixity::from_config_str)
+        if let Some(v) = meta
+            .get("fixity")
+            .and_then(Value::as_str)
+            .and_then(Fixity::from_config_str)
         {
             self.fixity = v;
         }
@@ -429,17 +480,35 @@ impl WorkspaceConfig {
     pub fn to_mapping(&self) -> Mapping {
         let mut map = Mapping::new();
         map.insert("spec".into(), Value::Int(SPEC_VERSION));
-        map.insert("content_format".into(), Value::String(self.content_format.as_config_str().into()));
+        map.insert(
+            "content_format".into(),
+            Value::String(self.content_format.as_config_str().into()),
+        );
 
         let mut metadata = Mapping::new();
-        metadata.insert("format".into(), Value::String(format_str(self.default_embed_format).into()));
-        metadata.insert("embed".into(), Value::String(self.embed_style.as_config_str().into()));
+        metadata.insert(
+            "format".into(),
+            Value::String(format_str(self.default_embed_format).into()),
+        );
+        metadata.insert(
+            "embed".into(),
+            Value::String(self.embed_style.as_config_str().into()),
+        );
         map.insert("metadata".into(), Value::Mapping(metadata));
 
         let mut references = Mapping::new();
-        references.insert("notation".into(), Value::String(self.notation.as_config_str().into()));
-        references.insert("path_style".into(), Value::String(self.path_style.as_config_str().into()));
-        references.insert("target".into(), Value::String(self.reference_target.as_config_str().into()));
+        references.insert(
+            "notation".into(),
+            Value::String(self.notation.as_config_str().into()),
+        );
+        references.insert(
+            "path_style".into(),
+            Value::String(self.path_style.as_config_str().into()),
+        );
+        references.insert(
+            "target".into(),
+            Value::String(self.reference_target.as_config_str().into()),
+        );
         references.insert("label".into(), Value::Bool(self.reference_label));
         map.insert("references".into(), Value::Mapping(references));
 
@@ -464,10 +533,19 @@ impl WorkspaceConfig {
             map.insert("relations".into(), Value::Mapping(relations));
         }
 
-        map.insert("id_storage".into(), Value::String(self.id_storage.as_config_str().into()));
+        map.insert(
+            "id_storage".into(),
+            Value::String(self.id_storage.as_config_str().into()),
+        );
         map.insert("updated".into(), Value::String(self.updated.clone()));
-        map.insert("identity".into(), Value::String(registration_str(self.identity).into()));
-        map.insert("fixity".into(), Value::String(self.fixity.as_config_str().into()));
+        map.insert(
+            "identity".into(),
+            Value::String(registration_str(self.identity).into()),
+        );
+        map.insert(
+            "fixity".into(),
+            Value::String(self.fixity.as_config_str().into()),
+        );
         map.insert("recycle_bin".into(), Value::Bool(self.recycle_bin));
         map
     }
@@ -500,7 +578,10 @@ pub enum ConfigIssueKind {
     /// `key` is a recognized axis but `value` is not a spelling colophon
     /// understands, so `apply` kept the default. `expected` lists the accepted
     /// spellings (advisory help; mirrors the axis's parser).
-    InvalidValue { value: String, expected: Vec<String> },
+    InvalidValue {
+        value: String,
+        expected: Vec<String>,
+    },
 }
 
 /// Top-level config keys (block names + scalar axes + the `spec` marker).
@@ -548,28 +629,40 @@ pub fn diagnose(meta: &Value) -> Vec<ConfigIssue> {
         match key.as_str() {
             "spec" => {} // version marker — not a policy axis
             "content_format" => {
-                enum_axis(&mut issues, key, value, |s| ContentFormat::from_config_str(s).is_some(), &[
-                    "markdown", "djot", "html",
-                ]);
+                enum_axis(
+                    &mut issues,
+                    key,
+                    value,
+                    |s| ContentFormat::from_config_str(s).is_some(),
+                    &["markdown", "djot", "html"],
+                );
             }
             "id_storage" => {
-                enum_axis(&mut issues, key, value, |s| IdStorage::from_config_str(s).is_some(), &[
-                    "registry",
-                    "frontmatter",
-                    "both",
-                ]);
+                enum_axis(
+                    &mut issues,
+                    key,
+                    value,
+                    |s| IdStorage::from_config_str(s).is_some(),
+                    &["registry", "frontmatter", "both"],
+                );
             }
             "identity" => {
-                enum_axis(&mut issues, key, value, |s| registration_from_str(s).is_some(), &[
-                    "none", "lazy", "eager",
-                ]);
+                enum_axis(
+                    &mut issues,
+                    key,
+                    value,
+                    |s| registration_from_str(s).is_some(),
+                    &["none", "lazy", "eager"],
+                );
             }
             "fixity" => {
-                enum_axis(&mut issues, key, value, |s| Fixity::from_config_str(s).is_some(), &[
-                    "off",
-                    "attachments",
-                    "all",
-                ]);
+                enum_axis(
+                    &mut issues,
+                    key,
+                    value,
+                    |s| Fixity::from_config_str(s).is_some(),
+                    &["off", "attachments", "all"],
+                );
             }
             "recycle_bin" => bool_axis(&mut issues, key, value),
             "updated" => {} // free-form field name
@@ -594,14 +687,26 @@ fn diagnose_metadata(issues: &mut Vec<ConfigIssue>, value: &Value) {
     for (key, v) in map {
         let dotted = format!("metadata.{key}");
         match key.as_str() {
-            "format" => enum_axis(issues, &dotted, v, |s| format_from_str(s).is_some(), &embed_format_spellings()),
-            "embed" => enum_axis(issues, &dotted, v, |s| EmbedStyle::from_config_str(s).is_some(), &[
-                "delimited",
-                "code_block",
-                "html_script",
-                "html_code",
-                "separate",
-            ]),
+            "format" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| format_from_str(s).is_some(),
+                &embed_format_spellings(),
+            ),
+            "embed" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| EmbedStyle::from_config_str(s).is_some(),
+                &[
+                    "delimited",
+                    "code_block",
+                    "html_script",
+                    "html_code",
+                    "separate",
+                ],
+            ),
             other => {
                 if let Some(sug) = nearest(other, METADATA_KEYS) {
                     issues.push(unknown(dotted, format!("metadata.{sug}")));
@@ -620,15 +725,27 @@ fn diagnose_reference_block(issues: &mut Vec<ConfigIssue>, prefix: &str, value: 
     for (key, v) in map {
         let dotted = format!("{prefix}.{key}");
         match key.as_str() {
-            "notation" => enum_axis(issues, &dotted, v, |s| Notation::from_config_str(s).is_some(), &[
-                "markdown", "wikilink", "bare",
-            ]),
-            "path_style" => enum_axis(issues, &dotted, v, |s| PathStyle::from_config_str(s).is_some(), &[
-                "root", "relative", "canonical",
-            ]),
-            "target" => enum_axis(issues, &dotted, v, |s| Addressing::from_config_str(s).is_some(), &[
-                "path", "id", "alias",
-            ]),
+            "notation" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| Notation::from_config_str(s).is_some(),
+                &["markdown", "wikilink", "bare"],
+            ),
+            "path_style" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| PathStyle::from_config_str(s).is_some(),
+                &["root", "relative", "canonical"],
+            ),
+            "target" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| Addressing::from_config_str(s).is_some(),
+                &["path", "id", "alias"],
+            ),
             "label" => bool_axis(issues, &dotted, v),
             other => {
                 if let Some(sug) = nearest(other, REFERENCE_KEYS) {
@@ -695,7 +812,10 @@ fn bool_axis(issues: &mut Vec<ConfigIssue>, key: &str, value: &Value) {
 }
 
 fn unknown(key: String, suggestion: String) -> ConfigIssue {
-    ConfigIssue { key, kind: ConfigIssueKind::UnknownKey { suggestion } }
+    ConfigIssue {
+        key,
+        kind: ConfigIssueKind::UnknownKey { suggestion },
+    }
 }
 
 /// The `metadata.format` spellings compiled into this build (yaml is always
@@ -783,10 +903,14 @@ fn format_str(format: fig::Format) -> &'static str {
     }
 }
 
-/// Parse the `identity` config value into a registration trigger set.
+/// Parse the `identity` config value into a registration trigger set. `none` is
+/// the canonical spelling for "identity off" (see `docs/config-vocab.md`), but
+/// `off` is accepted as a synonym so the two never diverge: it is the word the
+/// CLI's `--identity` flag and every other "off" axis (`fixity: off`) use, and a
+/// user who reaches for it must not be told it is invalid.
 fn registration_from_str(value: &str) -> Option<Registration> {
     match value {
-        "none" => Some(Registration::OFF),
+        "none" | "off" => Some(Registration::OFF),
         "lazy" => Some(Registration::LAZY),
         "eager" => Some(Registration::EAGER),
         _ => None,
@@ -827,9 +951,19 @@ mod tests {
     fn presets_encode_the_two_styles() {
         // Diaryx: no identity, path addressing. Obsidian: identity + id addressing.
         assert_eq!(WorkspaceConfig::paths_only().identity, Registration::OFF);
-        assert_eq!(WorkspaceConfig::paths_only().reference_target, Addressing::Path);
-        assert!(WorkspaceConfig::stable_ids().identity.fires_on(Trigger::Link));
-        assert_eq!(WorkspaceConfig::stable_ids().reference_target, Addressing::Id);
+        assert_eq!(
+            WorkspaceConfig::paths_only().reference_target,
+            Addressing::Path
+        );
+        assert!(
+            WorkspaceConfig::stable_ids()
+                .identity
+                .fires_on(Trigger::Link)
+        );
+        assert_eq!(
+            WorkspaceConfig::stable_ids().reference_target,
+            Addressing::Id
+        );
     }
 
     #[test]
@@ -899,7 +1033,10 @@ mod tests {
 
     /// Build a config value with a top-level `references` block and a `relations`
     /// block of per-relation overrides.
-    fn config_doc_nested(references: &[(&str, &str)], relations: &[(&str, &[(&str, &str)])]) -> Value {
+    fn config_doc_nested(
+        references: &[(&str, &str)],
+        relations: &[(&str, &[(&str, &str)])],
+    ) -> Value {
         let mut top = Mapping::new();
         let mut refs = Mapping::new();
         for (k, v) in references {
@@ -967,7 +1104,12 @@ mod tests {
     fn diagnose_flags_a_misspelled_top_level_key_with_a_suggestion() {
         let issues = diagnose(&config_doc(&[("recyle_bin", "false")]));
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].kind, ConfigIssueKind::UnknownKey { suggestion: "recycle_bin".into() });
+        assert_eq!(
+            issues[0].kind,
+            ConfigIssueKind::UnknownKey {
+                suggestion: "recycle_bin".into()
+            }
+        );
     }
 
     #[test]
@@ -1006,7 +1148,11 @@ mod tests {
 
     #[test]
     fn spec_ahead_fires_only_for_a_newer_spec() {
-        assert_eq!(spec_ahead(&config_doc(&[("identity", "lazy")])), None, "absent spec");
+        assert_eq!(
+            spec_ahead(&config_doc(&[("identity", "lazy")])),
+            None,
+            "absent spec"
+        );
         let at = {
             let mut m = Mapping::new();
             m.insert("spec".into(), Value::Int(SPEC_VERSION));
@@ -1023,11 +1169,17 @@ mod tests {
 
     #[test]
     fn serialized_defaults_and_presets_all_pass_diagnosis() {
-        for config in
-            [WorkspaceConfig::default(), WorkspaceConfig::paths_only(), WorkspaceConfig::stable_ids()]
-        {
+        for config in [
+            WorkspaceConfig::default(),
+            WorkspaceConfig::paths_only(),
+            WorkspaceConfig::stable_ids(),
+        ] {
             let serialized = Value::Mapping(config.to_mapping());
-            assert!(diagnose(&serialized).is_empty(), "flagged itself: {:?}", diagnose(&serialized));
+            assert!(
+                diagnose(&serialized).is_empty(),
+                "flagged itself: {:?}",
+                diagnose(&serialized)
+            );
         }
     }
 }

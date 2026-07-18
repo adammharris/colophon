@@ -120,13 +120,19 @@ impl ChangeSet {
 
     /// Stage a write of `contents` to `path` (workspace-relative).
     pub fn write(&mut self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> &mut Self {
-        self.ops.push(FileOp::Write { path: path.into(), bytes: contents.into() });
+        self.ops.push(FileOp::Write {
+            path: path.into(),
+            bytes: contents.into(),
+        });
         self
     }
 
     /// Stage a move from `from` to `to` (both workspace-relative).
     pub fn rename(&mut self, from: impl Into<PathBuf>, to: impl Into<PathBuf>) -> &mut Self {
-        self.ops.push(FileOp::Rename { from: from.into(), to: to.into() });
+        self.ops.push(FileOp::Rename {
+            from: from.into(),
+            to: to.into(),
+        });
         self
     }
 
@@ -229,11 +235,39 @@ impl ChangeSet {
         if self.ops.is_empty() {
             return Ok(());
         }
+        // Clamp every staged path to the workspace root *before* anything is
+        // written or journaled. A set is built from workspace-relative,
+        // already-normalized paths, so an escaping op cannot arise from colophon's
+        // own mutations — but `apply` also lands sets a caller assembled directly,
+        // and a link target that resolves to `../../../etc/passwd` must be refused
+        // rather than have the workspace write outside the tree it was pointed at.
+        for op in &self.ops {
+            match op {
+                FileOp::Write { path, .. } | FileOp::Remove { path } => {
+                    guard_in_root(path)?;
+                }
+                FileOp::Rename { from, to } => {
+                    guard_in_root(from)?;
+                    guard_in_root(to)?;
+                }
+            }
+        }
+        // Refuse to clobber a journal left by a *previous* interrupted change. Its
+        // presence means an earlier mutation crashed mid-apply and has not been
+        // recovered; overwriting it with this set's intent would strand the old
+        // change half-applied with no record of how to finish it. Recovery
+        // ([`crate::journal::recover`], which `colophon check` runs) must complete
+        // it first. A journal this same apply is about to write does not exist yet,
+        // so this only ever fires on a genuinely stale one.
+        let journal = root.join(crate::journal::JOURNAL_NAME);
+        if fs.try_exists(&journal).await? {
+            return Err(Error::StaleJournal(journal));
+        }
         // The commit point: durably record the whole intent before touching a
         // single document. `write_atomic` flushes it, so a crash finds the
         // journal whole or not at all — never half-written.
-        let journal = root.join(crate::journal::JOURNAL_NAME);
-        fs.write_atomic(&journal, &crate::journal::encode(&self.ops)?).await?;
+        fs.write_atomic(&journal, &crate::journal::encode(&self.ops)?)
+            .await?;
 
         let mut undo: Vec<Undo> = Vec::new();
         for op in &self.ops {
@@ -289,12 +323,7 @@ enum Undo {
     Rename { from: PathBuf, to: PathBuf },
 }
 
-async fn exec<FS: Storage>(
-    fs: &FS,
-    root: &Path,
-    op: &FileOp,
-    undo: &mut Vec<Undo>,
-) -> Result<()> {
+async fn exec<FS: Storage>(fs: &FS, root: &Path, op: &FileOp, undo: &mut Vec<Undo>) -> Result<()> {
     match op {
         FileOp::Write { path, bytes } => {
             let full = root.join(path);
@@ -302,7 +331,10 @@ async fn exec<FS: Storage>(
             // (a full disk) leaves a truncated file, and restoring the old
             // bytes over it is exactly the repair.
             match fs.read(&full).await {
-                Ok(old) => undo.push(Undo::Restore { path: full.clone(), bytes: old }),
+                Ok(old) => undo.push(Undo::Restore {
+                    path: full.clone(),
+                    bytes: old,
+                }),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     undo.push(Undo::Delete { path: full.clone() });
                 }
@@ -321,13 +353,19 @@ async fn exec<FS: Storage>(
             let (from_full, to_full) = (root.join(from), root.join(to));
             ensure_parent(fs, &to_full).await?;
             fs.rename(&from_full, &to_full).await?;
-            undo.push(Undo::Rename { from: to_full, to: from_full });
+            undo.push(Undo::Rename {
+                from: to_full,
+                to: from_full,
+            });
         }
         FileOp::Remove { path } => {
             let full = root.join(path);
             let old = fs.read(&full).await?;
             fs.remove_file(&full).await?;
-            undo.push(Undo::Restore { path: full, bytes: old });
+            undo.push(Undo::Restore {
+                path: full,
+                bytes: old,
+            });
         }
     }
     Ok(())
@@ -360,6 +398,17 @@ async fn unwind<FS: Storage>(fs: &FS, undo: Vec<Undo>) -> Result<()> {
         Some(e) => Err(e.into()),
         None => Ok(()),
     }
+}
+
+/// Refuse a staged path that would resolve outside the workspace root. The
+/// write-side counterpart to the read guard in [`crate::Workspace`]'s `load`;
+/// both defer to [`crate::link::escapes_root`] so read and write clamp to the
+/// exact same boundary.
+fn guard_in_root(path: &Path) -> Result<()> {
+    if crate::link::escapes_root(path) {
+        return Err(Error::Escape(path.to_path_buf()));
+    }
+    Ok(())
 }
 
 /// Create `full`'s parent directory if it is missing. Unconditional (rather than
@@ -518,7 +567,10 @@ mod tests {
         for event in fs.events() {
             if let FsEvent::Write(p) = event {
                 let name = p.file_name().unwrap().to_string_lossy();
-                assert!(name.contains("colophon-tmp"), "wrote a document non-atomically: {name}");
+                assert!(
+                    name.contains("colophon-tmp"),
+                    "wrote a document non-atomically: {name}"
+                );
             }
         }
         // And nothing staging survives.
@@ -527,7 +579,10 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains("colophon-tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "staging files survived apply: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "staging files survived apply: {leftovers:?}"
+        );
     }
 
     #[test]
@@ -598,7 +653,11 @@ mod tests {
         cs.write("parent.md", "new parent");
 
         // The journal the real apply would have committed at its commit point.
-        std::fs::write(root.join(JOURNAL_NAME), crate::journal::encode(cs.ops()).unwrap()).unwrap();
+        std::fs::write(
+            root.join(JOURNAL_NAME),
+            crate::journal::encode(cs.ops()).unwrap(),
+        )
+        .unwrap();
         // A crash after the first document landed but before the second.
         std::fs::write(root.join("child.md"), "child").unwrap();
 
@@ -607,6 +666,92 @@ mod tests {
         assert_eq!(read(&root, "child.md").as_deref(), Some("child"));
         assert_eq!(read(&root, "parent.md").as_deref(), Some("new parent"));
         assert!(!root.join(JOURNAL_NAME).exists());
+    }
+
+    #[test]
+    fn apply_refuses_a_path_that_escapes_the_root() {
+        // A staged op whose path climbs above the root (a hostile link target that
+        // resolved to `../escape.md`) is refused before anything — journal or
+        // document — is written.
+        let root = tmp("escape-write");
+        let mut cs = ChangeSet::new();
+        cs.write("../escape.md", "should never land");
+        let err = block_on(cs.apply(&StdFs, &root)).unwrap_err();
+        assert!(
+            matches!(err, Error::Escape(_)),
+            "expected Escape, got {err:?}"
+        );
+        // Nothing was written, in or out of the root, and no journal remains.
+        assert!(!root.parent().unwrap().join("escape.md").exists());
+        assert!(!root.join(JOURNAL_NAME).exists());
+    }
+
+    #[test]
+    fn apply_refuses_an_absolute_path() {
+        // An absolute path would ignore the root under `root.join`; it escapes too.
+        let root = tmp("escape-abs");
+        let mut cs = ChangeSet::new();
+        cs.write("/tmp/colophon-abs-escape-should-not-exist.md", "nope");
+        let err = block_on(cs.apply(&StdFs, &root)).unwrap_err();
+        assert!(
+            matches!(err, Error::Escape(_)),
+            "expected Escape, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn apply_refuses_to_clobber_a_stale_journal() {
+        // A journal from a *previous* interrupted change is on disk. Applying a new
+        // set must refuse rather than overwrite it — the old change would otherwise
+        // be stranded with no record to recover from.
+        let root = tmp("stale-journal");
+        std::fs::write(root.join("doc.md"), "before").unwrap();
+        // Pretend a prior change crashed mid-apply, leaving a valid journal.
+        let prior = vec![FileOp::Write {
+            path: "other.md".into(),
+            bytes: b"prior".to_vec(),
+        }];
+        std::fs::write(
+            root.join(JOURNAL_NAME),
+            crate::journal::encode(&prior).unwrap(),
+        )
+        .unwrap();
+
+        let mut cs = ChangeSet::new();
+        cs.write("doc.md", "after");
+        let err = block_on(cs.apply(&StdFs, &root)).unwrap_err();
+        assert!(
+            matches!(err, Error::StaleJournal(_)),
+            "expected StaleJournal, got {err:?}"
+        );
+        // The new set did not land, and the old journal is untouched — recovery can
+        // still complete the interrupted change.
+        assert_eq!(read(&root, "doc.md").as_deref(), Some("before"));
+        assert!(root.join(JOURNAL_NAME).exists());
+    }
+
+    #[test]
+    fn apply_proceeds_once_the_stale_journal_is_recovered() {
+        // After recovery clears the journal, the same set applies cleanly — the
+        // refusal is about an *unrecovered* interruption, not a permanent lock.
+        let root = tmp("stale-journal-cleared");
+        std::fs::write(root.join("doc.md"), "before").unwrap();
+        let prior = vec![FileOp::Write {
+            path: "other.md".into(),
+            bytes: b"prior".to_vec(),
+        }];
+        std::fs::write(
+            root.join(JOURNAL_NAME),
+            crate::journal::encode(&prior).unwrap(),
+        )
+        .unwrap();
+        block_on(crate::journal::recover(&StdFs, &root)).unwrap();
+
+        let mut cs = ChangeSet::new();
+        cs.write("doc.md", "after");
+        block_on(cs.apply(&StdFs, &root)).unwrap();
+        assert_eq!(read(&root, "doc.md").as_deref(), Some("after"));
+        assert_eq!(read(&root, "other.md").as_deref(), Some("prior"));
     }
 
     #[test]

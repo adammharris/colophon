@@ -121,7 +121,11 @@ impl<FS, Id, Ix> Workspace<FS, Id, Ix> {
     pub fn reference_style(&self) -> ReferenceStyle {
         self.reference_style.unwrap_or(ReferenceStyle {
             wrapper: Wrapper::Markdown,
-            addressing: if self.id_links { Addressing::Id } else { Addressing::Path },
+            addressing: if self.id_links {
+                Addressing::Id
+            } else {
+                Addressing::Path
+            },
             label: false,
             path_style: self.link_style,
         })
@@ -130,7 +134,9 @@ impl<FS, Id, Ix> Workspace<FS, Id, Ix> {
     /// The reference style colophon authors `relation`'s links in: the
     /// relation's own override if it declares one, else the workspace default.
     pub fn reference_style_for(&self, relation: &str) -> ReferenceStyle {
-        self.relations.style_for(relation).unwrap_or_else(|| self.reference_style())
+        self.relations
+            .style_for(relation)
+            .unwrap_or_else(|| self.reference_style())
     }
 
     /// The metadata format a new document gets when it inherits no parent block
@@ -342,7 +348,9 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                 continue;
             }
             dirs.insert(dir_of(&path));
-            let Ok((_, doc)) = self.load(&path).await else { continue };
+            let Ok((_, doc)) = self.load(&path).await else {
+                continue;
+            };
             for edge in self.relations().edges(&doc.meta) {
                 let link = Link::parse(&edge.target);
                 let is_spanning = Some(edge.relation.as_str()) == spanning.as_deref();
@@ -411,14 +419,21 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     /// colophon workspace — is neither read nor reported. Callers filter the
     /// result for the file kind they care about (content documents for the orphan
     /// check, opaque payloads for `attach --all`).
-    pub(crate) async fn direct_child_files(&self, dirs: &BTreeSet<PathBuf>) -> Result<Vec<PathBuf>> {
+    pub(crate) async fn direct_child_files(
+        &self,
+        dirs: &BTreeSet<PathBuf>,
+    ) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for dir in dirs {
             let Ok(entries) = self.fs.read_dir(&self.root.join(dir)).await else {
                 continue;
             };
             for entry in entries {
-                let Some(name) = entry.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                let Some(name) = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_owned)
+                else {
                     continue;
                 };
                 if name.starts_with('.') || !entry.file_type().is_file() {
@@ -458,7 +473,11 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                 return Ok(());
             };
             for entry in entries {
-                let Some(name) = entry.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                let Some(name) = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_owned)
+                else {
                     continue;
                 };
                 if name.starts_with('.') {
@@ -471,7 +490,9 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                 };
                 if entry.file_type().is_dir() {
                     self.scan_content_dir(rel, docs).await?;
-                } else if entry.file_type().is_file() && ContentFormat::from_extension(&rel).is_some() {
+                } else if entry.file_type().is_file()
+                    && ContentFormat::from_extension(&rel).is_some()
+                {
                     docs.push(rel);
                 }
             }
@@ -491,7 +512,11 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                 return Ok(());
             };
             for entry in entries {
-                let Some(name) = entry.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                let Some(name) = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_owned)
+                else {
                     continue;
                 };
                 if name.starts_with('.') {
@@ -531,7 +556,11 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                 return Ok(());
             };
             for entry in entries {
-                let Some(name) = entry.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                let Some(name) = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_owned)
+                else {
                     continue;
                 };
                 if name.starts_with('.') {
@@ -602,7 +631,7 @@ impl<FS: Storage, Id: IdentityPolicy, Ix: IndexStore> Workspace<FS, Id, Ix> {
             )));
         }
         if !self.fs.try_exists(&self.root.join(&path)).await? {
-            return Err(Error::Structure(format!("{} does not exist", path.display())));
+            return Err(Error::NotFound(path.to_path_buf()));
         }
         let id = self.mint_unique(&path);
         self.index.register(&id, &path);
@@ -771,6 +800,49 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 Err(e)
             }
         }
+    }
+
+    /// Bootstrap a **linked sidecar**: create `sidecar` (a whole-file metadata
+    /// document, seeded with `seed`, in `format`) beside the workspace and add
+    /// `pointer` → `sidecar` to the root document's metadata — as one crash-safe
+    /// [`ChangeSet`], so either both land or neither. Returns whether the sidecar
+    /// was newly written (`false` when it already existed and only the pointer was
+    /// (re-)added).
+    ///
+    /// This is the shared mechanic behind the registry and config documents the
+    /// CLI declares on first use: a workspace resource is *reachable* precisely
+    /// because the root points at it, so a sidecar written without the pointer —
+    /// or a pointer added without the sidecar — is a torn half a scan can neither
+    /// find nor trust. Bundling both into one change set is exactly why that torn
+    /// state cannot occur. The seed and the pointer relation are the caller's
+    /// policy (what the sidecar is *for*); the crash-safe two-file landing is the
+    /// library's.
+    pub async fn link_sidecar(
+        &self,
+        root_doc: &Path,
+        pointer: &str,
+        sidecar: &Path,
+        seed: &crate::meta::Mapping,
+        format: fig::Format,
+    ) -> Result<bool> {
+        let mut cs = ChangeSet::new();
+        let created = !self.fs.try_exists(&self.root.join(sidecar)).await?;
+        if created {
+            cs.write(sidecar, crate::meta::serialize_mapping(seed, format)?);
+        }
+        // The pointer value is the sidecar path as written (a bare filename when it
+        // sits beside the root, which is the convention). Set it comment- and
+        // format-preservingly, like any other metadata edit.
+        let (text, doc) = self.load(root_doc).await?;
+        let updated = crate::edit::set_in_text(
+            &text,
+            doc.carrier,
+            pointer,
+            crate::edit::infer_scalar(&sidecar.to_string_lossy()),
+        )?;
+        cs.write(root_doc, updated);
+        cs.apply(&self.fs, &self.root).await?;
+        Ok(created)
     }
 
     // TODO(port): scan/traverse from diaryx_core::workspace land here.

@@ -55,7 +55,10 @@ const SIDECAR_EXTENSIONS: &[&str] = &["yaml", "yml", "json", "toml", "fig", "fig
 /// `sub/a.pdf.yaml`), so the sidecar's `content` pointer is just the basename.
 fn sidecar_path(payload: &Path, format: fig::Format) -> PathBuf {
     let ext = whole_file_extension(format);
-    let name = payload.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let name = payload
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
     payload.with_file_name(format!("{name}.{ext}"))
 }
 
@@ -142,7 +145,11 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                 return Ok(());
             };
             for entry in entries {
-                let Some(name) = entry.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                let Some(name) = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_owned)
+                else {
                     continue;
                 };
                 if name.starts_with('.') {
@@ -198,7 +205,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let parent = link::normalize(parent);
 
         if !self.fs().try_exists(&self.root().join(&payload)).await? {
-            return Err(Error::Structure(format!("{} does not exist", payload.display())));
+            return Err(Error::NotFound(payload.to_path_buf()));
         }
         // An attachment shadows *external* content. A file colophon can read is a
         // document that should carry its own metadata — adopt it, don't sidecar it.
@@ -213,7 +220,7 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let format = self.default_embed_format();
         let node = sidecar_path(&payload, format);
         if self.fs().try_exists(&self.root().join(&node)).await? {
-            return Err(Error::Structure(format!("{} already exists", node.display())));
+            return Err(Error::AlreadyExists(node.to_path_buf()));
         }
 
         let (parent_text, parent_doc) = self.load(&parent).await?;
@@ -234,8 +241,12 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         // The sidecar's inverse link up (the parent exists → an id link registers
         // it by path) and the parent's spanning entry down (the sidecar is not on
         // disk yet → mint its id directly rather than register-by-path).
-        let up = self.authored_target(&inverse, &node, &parent, &parent_title, true).await?;
-        let down = self.authored_target(&spanning, &parent, &node, &title, false).await?;
+        let up = self
+            .authored_target(&inverse, &node, &parent, &parent_title, true)
+            .await?;
+        let down = self
+            .authored_target(&spanning, &parent, &node, &title, false)
+            .await?;
 
         // The sidecar: a whole-file mapping pointing `content` at the payload
         // (a sibling, so just its name) and flagged as an attachment.
@@ -255,7 +266,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         // no per-file opt-in. The payload is read once here, at attach time.
         if self.fixity().covers_payloads() {
             let bytes = self.fs().read(&self.root().join(&payload)).await?;
-            map.insert("content_hash".into(), Value::String(crate::fixity::digest(&bytes)));
+            map.insert(
+                "content_hash".into(),
+                Value::String(crate::fixity::digest(&bytes)),
+            );
         }
         let node_text = crate::meta::serialize_mapping(&map, format)?;
 
@@ -263,7 +277,10 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         // absent — `append` needs an existing sequence).
         let mut parent_editor = MetaEditor::open_or_init(&parent_text, parent_doc.carrier)?;
         let span_path = [Segment::Key(&spanning)];
-        if parent_editor.append_value(&span_path, fig::Value::Str(down.clone())).is_err() {
+        if parent_editor
+            .append_value(&span_path, fig::Value::Str(down.clone()))
+            .is_err()
+        {
             parent_editor.set_value(&span_path, fig::Value::Seq(vec![fig::Value::Str(down)]))?;
         }
         let parent_out = parent_editor.render()?;
@@ -302,7 +319,8 @@ mod tests {
     }
 
     fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("colophon-attach-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("colophon-attach-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -326,19 +344,34 @@ mod tests {
 
         let sidecar = read(&dir, "photo.jpg.yaml");
         assert!(sidecar.contains("title: Photo"), "{sidecar}");
-        assert!(sidecar.contains("content: photo.jpg"), "points at the payload: {sidecar}");
-        assert!(sidecar.contains("attachment: true"), "flagged as an attachment: {sidecar}");
-        assert!(sidecar.contains("index.md"), "inverse link up to the parent: {sidecar}");
+        assert!(
+            sidecar.contains("content: photo.jpg"),
+            "points at the payload: {sidecar}"
+        );
+        assert!(
+            sidecar.contains("attachment: true"),
+            "flagged as an attachment: {sidecar}"
+        );
+        assert!(
+            sidecar.contains("index.md"),
+            "inverse link up to the parent: {sidecar}"
+        );
 
         // The parent links the sidecar (the node), never the raw payload.
         let index = read(&dir, "index.md");
         assert!(index.contains("photo.jpg.yaml"), "{index}");
-        assert!(!index.contains("[photo.jpg]") && !index.contains("(photo.jpg)"), "{index}");
+        assert!(
+            !index.contains("[photo.jpg]") && !index.contains("(photo.jpg)"),
+            "{index}"
+        );
 
         // The payload is untouched, and the whole workspace validates — the
         // `content` pointer resolves, and the opaque payload is neither read nor
         // treated as an orphan.
-        assert_eq!(std::fs::read(dir.join("photo.jpg")).unwrap(), [0xff, 0xd8, 0xff, 0xe0, 0x00]);
+        assert_eq!(
+            std::fs::read(dir.join("photo.jpg")).unwrap(),
+            [0xff, 0xd8, 0xff, 0xe0, 0x00]
+        );
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 
@@ -355,7 +388,10 @@ mod tests {
 
         let sidecar = read(&dir, "photo.jpg.yaml");
         let expected = crate::fixity::digest(payload);
-        assert!(sidecar.contains(&format!("content_hash: {expected}")), "{sidecar}");
+        assert!(
+            sidecar.contains(&format!("content_hash: {expected}")),
+            "{sidecar}"
+        );
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 
@@ -397,7 +433,9 @@ mod tests {
             .into_iter()
             .find(|f| matches!(f, Finding::FixityMismatch { .. }))
             .expect("a mismatch to re-stamp");
-        let fix = block_on(w.suggest_fix(&finding)).unwrap().expect("a re-stamp fix");
+        let fix = block_on(w.suggest_fix(&finding))
+            .unwrap()
+            .expect("a re-stamp fix");
         block_on(w.apply_fix(&fix)).unwrap();
 
         // Re-blessed: the recorded hash now matches the new bytes.
@@ -411,10 +449,18 @@ mod tests {
         write(&dir, "index.md", b"---\ntitle: Home\n---\n");
         write(&dir, "photo.jpg", &[0x01, 0x02, 0x03]);
 
-        let w = || Workspace::builder(StdFs).root(&dir).fixity(crate::config::Fixity::Off).build();
+        let w = || {
+            Workspace::builder(StdFs)
+                .root(&dir)
+                .fixity(crate::config::Fixity::Off)
+                .build()
+        };
         block_on(w().attach(Path::new("photo.jpg"), Path::new("index.md"))).unwrap();
 
-        assert!(!read(&dir, "photo.jpg.yaml").contains("content_hash"), "off records nothing");
+        assert!(
+            !read(&dir, "photo.jpg.yaml").contains("content_hash"),
+            "off records nothing"
+        );
         assert_eq!(block_on(w().check("index.md")).unwrap(), vec![]);
     }
 
@@ -424,7 +470,11 @@ mod tests {
         write(&dir, "index.md", b"---\ntitle: Home\n---\n");
         write(&dir, "assets/logo.png", &[0x89, 0x50, 0x4e, 0x47]);
 
-        assert!(block_on(ws(&dir).attachment_for(Path::new("assets/logo.png"))).unwrap().is_none());
+        assert!(
+            block_on(ws(&dir).attachment_for(Path::new("assets/logo.png")))
+                .unwrap()
+                .is_none()
+        );
         block_on(ws(&dir).attach(Path::new("assets/logo.png"), Path::new("index.md"))).unwrap();
         assert_eq!(
             block_on(ws(&dir).attachment_for(Path::new("assets/logo.png"))).unwrap(),
@@ -433,8 +483,12 @@ mod tests {
 
         // A readable document is not an attachment — adopt it instead.
         write(&dir, "note.md", b"---\ntitle: Note\n---\nbody\n");
-        let err = block_on(ws(&dir).attach(Path::new("note.md"), Path::new("index.md"))).unwrap_err();
-        assert!(err.to_string().contains("not an opaque attachment"), "{err}");
+        let err =
+            block_on(ws(&dir).attach(Path::new("note.md"), Path::new("index.md"))).unwrap_err();
+        assert!(
+            err.to_string().contains("not an opaque attachment"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -448,7 +502,10 @@ mod tests {
 
         let mut loose = block_on(ws(&dir).loose_attachments()).unwrap();
         loose.sort();
-        assert_eq!(loose, vec![PathBuf::from("a.pdf"), PathBuf::from("sub/b.png")]);
+        assert_eq!(
+            loose,
+            vec![PathBuf::from("a.pdf"), PathBuf::from("sub/b.png")]
+        );
 
         // Attaching one drops it from the loose set (its sidecar now claims it).
         block_on(ws(&dir).attach(Path::new("a.pdf"), Path::new("index.md"))).unwrap();
@@ -467,12 +524,21 @@ mod tests {
         write(&dir, "photo.jpg", &[0xff, 0xd8]);
         block_on(ws(&dir).attach(Path::new("photo.jpg"), Path::new("index.md"))).unwrap();
 
-        block_on(ws(&dir).rename(Path::new("photo.jpg.yaml"), Path::new("media/hero.jpg.yaml")))
-            .unwrap();
+        block_on(ws(&dir).rename(
+            Path::new("photo.jpg.yaml"),
+            Path::new("media/hero.jpg.yaml"),
+        ))
+        .unwrap();
 
-        assert!(dir.join("media/hero.jpg").exists(), "payload moved beside the sidecar");
+        assert!(
+            dir.join("media/hero.jpg").exists(),
+            "payload moved beside the sidecar"
+        );
         assert!(!dir.join("photo.jpg").exists(), "old payload gone");
-        assert!(read(&dir, "media/hero.jpg.yaml").contains("content: hero.jpg"), "content repointed");
+        assert!(
+            read(&dir, "media/hero.jpg.yaml").contains("content: hero.jpg"),
+            "content repointed"
+        );
         assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
     }
 }

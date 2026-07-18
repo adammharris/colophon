@@ -110,7 +110,10 @@ const CODE_KINDS: [&str; 4] = ["verbatim", "code_block", "raw_inline", "raw_bloc
 /// (`twig_document_query`) by selecting each code-bearing node kind
 /// ([`CODE_KINDS`]) and taking its whole span; see
 /// [`crate::link::scan_wikilinks`]. Spans are returned sorted by start offset.
-pub fn code_spans(body: &str, format: ContentFormat) -> crate::error::Result<Vec<std::ops::Range<usize>>> {
+pub fn code_spans(
+    body: &str,
+    format: ContentFormat,
+) -> crate::error::Result<Vec<std::ops::Range<usize>>> {
     let mut doc = parse(body, format)?;
     let mut spans = Vec::new();
     for kind in CODE_KINDS {
@@ -135,7 +138,10 @@ pub fn code_spans(body: &str, format: ContentFormat) -> crate::error::Result<Vec
 /// Reference-style and autolink forms also surface as `link` nodes; the caller
 /// keeps only the inline `[label](target)` ones (a successful markdown parse),
 /// which is the form colophon can resolve and rewrite in place.
-pub fn link_spans(body: &str, format: ContentFormat) -> crate::error::Result<Vec<std::ops::Range<usize>>> {
+pub fn link_spans(
+    body: &str,
+    format: ContentFormat,
+) -> crate::error::Result<Vec<std::ops::Range<usize>>> {
     let mut doc = parse(body, format)?;
     let mut spans: Vec<_> = doc
         .query("link")
@@ -153,12 +159,30 @@ mod tests {
 
     #[test]
     fn infers_format_from_extension() {
-        assert_eq!(ContentFormat::from_extension(Path::new("a.md")), Some(ContentFormat::Markdown));
-        assert_eq!(ContentFormat::from_extension(Path::new("a.markdown")), Some(ContentFormat::Markdown));
-        assert_eq!(ContentFormat::from_extension(Path::new("a.dj")), Some(ContentFormat::Djot));
-        assert_eq!(ContentFormat::from_extension(Path::new("a.djot")), Some(ContentFormat::Djot));
-        assert_eq!(ContentFormat::from_extension(Path::new("a.html")), Some(ContentFormat::Html));
-        assert_eq!(ContentFormat::from_extension(Path::new("a.htm")), Some(ContentFormat::Html));
+        assert_eq!(
+            ContentFormat::from_extension(Path::new("a.md")),
+            Some(ContentFormat::Markdown)
+        );
+        assert_eq!(
+            ContentFormat::from_extension(Path::new("a.markdown")),
+            Some(ContentFormat::Markdown)
+        );
+        assert_eq!(
+            ContentFormat::from_extension(Path::new("a.dj")),
+            Some(ContentFormat::Djot)
+        );
+        assert_eq!(
+            ContentFormat::from_extension(Path::new("a.djot")),
+            Some(ContentFormat::Djot)
+        );
+        assert_eq!(
+            ContentFormat::from_extension(Path::new("a.html")),
+            Some(ContentFormat::Html)
+        );
+        assert_eq!(
+            ContentFormat::from_extension(Path::new("a.htm")),
+            Some(ContentFormat::Html)
+        );
         assert_eq!(ContentFormat::from_extension(Path::new("a.yaml")), None);
         assert_eq!(ContentFormat::from_extension(Path::new("noext")), None);
     }
@@ -166,7 +190,11 @@ mod tests {
     #[test]
     fn extension_matches_the_primary_from_extension_spelling() {
         // The derived filename's extension must round-trip back to the same format.
-        for f in [ContentFormat::Markdown, ContentFormat::Djot, ContentFormat::Html] {
+        for f in [
+            ContentFormat::Markdown,
+            ContentFormat::Djot,
+            ContentFormat::Html,
+        ] {
             let name = format!("derived.{}", f.extension());
             assert_eq!(ContentFormat::from_extension(Path::new(&name)), Some(f));
         }
@@ -197,15 +225,23 @@ mod tests {
         // The real inline link is found, its span the whole `[label](target)`.
         let want = body.find("[the doc](notes/a.md)").unwrap();
         assert!(
-            spans.iter().any(|s| s.start == want && &body[s.clone()] == "[the doc](notes/a.md)"),
+            spans
+                .iter()
+                .any(|s| s.start == want && &body[s.clone()] == "[the doc](notes/a.md)"),
             "expected the inline link span, got {spans:?}"
         );
         // The backtick-wrapped `[not](a link)` is code, not a link.
         let code_at = body.find("[not]").unwrap();
-        assert!(!spans.iter().any(|s| s.contains(&code_at)), "code must not be a link: {spans:?}");
+        assert!(
+            !spans.iter().any(|s| s.contains(&code_at)),
+            "code must not be a link: {spans:?}"
+        );
         // `[text]` with no destination is not a link either.
         let bracket_at = body.find("[text]").unwrap();
-        assert!(!spans.iter().any(|s| s.contains(&bracket_at)), "bare brackets are not a link");
+        assert!(
+            !spans.iter().any(|s| s.contains(&bracket_at)),
+            "bare brackets are not a link"
+        );
     }
 
     #[test]
@@ -213,7 +249,9 @@ mod tests {
         let body = "Here is [a link](../b.dj) inline.\n";
         let spans = link_spans(body, ContentFormat::Djot).unwrap();
         assert!(
-            spans.iter().any(|s| &body[s.clone()] == "[a link](../b.dj)"),
+            spans
+                .iter()
+                .any(|s| &body[s.clone()] == "[a link](../b.dj)"),
             "djot inline link span, got {spans:?}"
         );
     }
@@ -226,11 +264,19 @@ mod tests {
         // The plain wikilink is untouched by any code span...
         let wikilink_span = body.find("[[colophon:abc123]]").unwrap()
             ..body.find("[[colophon:abc123]]").unwrap() + "[[colophon:abc123]]".len();
-        assert!(!spans.iter().any(|cs| cs.start < wikilink_span.end && wikilink_span.start < cs.end));
+        assert!(
+            !spans
+                .iter()
+                .any(|cs| cs.start < wikilink_span.end && wikilink_span.start < cs.end)
+        );
 
         // ...but the backtick-wrapped one is inside exactly one code span.
         let code_start = body.find('`').unwrap();
         let code_end = body.rfind('`').unwrap() + 1;
-        assert!(spans.iter().any(|cs| cs.start <= code_start && code_end <= cs.end));
+        assert!(
+            spans
+                .iter()
+                .any(|cs| cs.start <= code_start && code_end <= cs.end)
+        );
     }
 }

@@ -70,13 +70,22 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
         let mut titles: Option<crate::title::TitleIndex> = None;
         let mut trail: Vec<PathBuf> = Vec::new();
         let root = start.clone();
-        self.tree_node(start, None, &root, &mut titles, &mut trail).await
+        self.tree_node(start, None, &root, &mut titles, &mut trail)
+            .await
     }
 
     /// Read and parse the workspace-relative document at `path`, returning the
     /// raw text alongside. The building block traversal, validation, and
     /// mutation share.
     pub(crate) async fn load(&self, path: &Path) -> Result<(String, Document)> {
+        // Clamp reads to the workspace root: `path` may originate in a document's
+        // own metadata (a `contents`/`part_of` target), so a hostile or careless
+        // `../../../etc/passwd` must be refused here rather than opened. The
+        // traversal turns this error into an `Unreadable` node; a direct caller
+        // sees the `Escape` error itself.
+        if link::escapes_root(path) {
+            return Err(crate::error::Error::Escape(path.to_path_buf()));
+        }
         let text = self.fs().read_to_string(&self.root().join(path)).await?;
         let doc = Document::parse(path, &text)?;
         Ok((text, doc))
@@ -92,12 +101,24 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     ) -> Pin<Box<dyn Future<Output = Result<Node>> + 'a>> {
         Box::pin(async move {
             if trail.contains(&path) {
-                return Ok(Node { path, title: None, label, kind: NodeKind::Cycle, children: Vec::new() });
+                return Ok(Node {
+                    path,
+                    title: None,
+                    label,
+                    kind: NodeKind::Cycle,
+                    children: Vec::new(),
+                });
             }
             match self.fs().try_exists(&self.root().join(&path)).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    return Ok(Node { path, title: None, label, kind: NodeKind::Missing, children: Vec::new() });
+                    return Ok(Node {
+                        path,
+                        title: None,
+                        label,
+                        kind: NodeKind::Missing,
+                        children: Vec::new(),
+                    });
                 }
                 Err(e) => {
                     return Ok(Node {
@@ -121,7 +142,11 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                     });
                 }
             };
-            let title = doc.meta.get("title").and_then(Value::as_str).map(str::to_owned);
+            let title = doc
+                .meta
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
 
             trail.push(path.clone());
             let mut children = Vec::new();
@@ -156,13 +181,22 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
                     }
                     Target::Path(p) => p,
                 };
-                children.push(self.tree_node(child_path, child.label, root, titles, trail).await?);
+                children.push(
+                    self.tree_node(child_path, child.label, root, titles, trail)
+                        .await?,
+                );
                 // (titles carried by &mut, so a nominal link deeper in the tree
                 // reuses the index built above rather than rescanning.)
             }
             trail.pop();
 
-            Ok(Node { path, title, label, kind: NodeKind::Doc, children })
+            Ok(Node {
+                path,
+                title,
+                label,
+                kind: NodeKind::Doc,
+                children,
+            })
         })
     }
 }
@@ -190,8 +224,16 @@ mod tests {
     #[test]
     fn walks_the_spanning_tree_with_labels_and_titles() {
         let dir = tempdir("walk");
-        write(&dir, "index.md", "---\ntitle: Root\ncontents:\n- '[A](notes/a.md)'\n- missing.md\n---\n");
-        write(&dir, "notes/a.md", "---\ntitle: A\npart_of: ../index.md\n---\n");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- '[A](notes/a.md)'\n- missing.md\n---\n",
+        );
+        write(
+            &dir,
+            "notes/a.md",
+            "---\ntitle: A\npart_of: ../index.md\n---\n",
+        );
 
         let ws = Workspace::builder(StdFs).root(&dir).build();
         let root = block_on(ws.tree("index.md")).unwrap();
@@ -227,7 +269,10 @@ mod tests {
         assert_eq!(root.children[0].path, PathBuf::from("notes/alpha.md"));
 
         // `[[Dup]]` → two documents claim the title, so it cannot resolve.
-        assert_eq!(root.children[1].kind, NodeKind::AmbiguousAlias("Dup".into()));
+        assert_eq!(
+            root.children[1].kind,
+            NodeKind::AmbiguousAlias("Dup".into())
+        );
 
         // `[[Ghost]]` → no document claims it; falls through to a missing path.
         assert_eq!(root.children[2].kind, NodeKind::Missing);

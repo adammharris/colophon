@@ -39,8 +39,9 @@ const K: [u32; 64] = [
 
 /// The initial hash state — the first 32 bits of the fractional parts of the
 /// square roots of the first 8 primes (FIPS 180-4 §5.3.3).
-const H0: [u32; 8] =
-    [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+const H0: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
 
 /// The raw SHA-256 digest of `bytes`, as 32 bytes.
 fn sha256(bytes: &[u8]) -> [u8; 32] {

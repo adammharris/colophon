@@ -104,8 +104,14 @@ mod tests {
         ix.insert("Shared", "one.md");
         ix.insert("Shared", "two.md");
 
-        assert_eq!(ix.resolve("My File"), TitleMatch::Unique(PathBuf::from("notes/a.md")));
-        assert_eq!(ix.resolve("a"), TitleMatch::Unique(PathBuf::from("notes/a.md")));
+        assert_eq!(
+            ix.resolve("My File"),
+            TitleMatch::Unique(PathBuf::from("notes/a.md"))
+        );
+        assert_eq!(
+            ix.resolve("a"),
+            TitleMatch::Unique(PathBuf::from("notes/a.md"))
+        );
         assert_eq!(
             ix.resolve("Shared"),
             TitleMatch::Ambiguous(vec![PathBuf::from("one.md"), PathBuf::from("two.md")])

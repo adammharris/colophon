@@ -188,10 +188,16 @@ fn config_set_refuses_a_setting_check_would_ignore() {
     let dir = workspace("refuse");
     let (ok, out) = run(&dir, &["config", "fixity", "alll"]);
     assert!(!ok, "a bad value must be refused: {out}");
-    assert!(out.contains("attachments"), "lists the accepted values: {out}");
+    assert!(
+        out.contains("attachments"),
+        "lists the accepted values: {out}"
+    );
     let (ok, out) = run(&dir, &["config", "references.notaton", "bare"]);
     assert!(!ok, "a typo'd nested key must be refused: {out}");
-    assert!(out.contains("references.notation"), "suggests the real key: {out}");
+    assert!(
+        out.contains("references.notation"),
+        "suggests the real key: {out}"
+    );
 }
 
 #[test]
@@ -206,10 +212,22 @@ fn config_setup_materializes_the_full_effective_config() {
     let (ok, out) = run(&dir, &["config", "--setup"]);
     assert!(ok, "{out}");
     let cfg = std::fs::read_to_string(dir.join("colophon.yaml")).unwrap();
-    assert!(cfg.contains("maintainer: adam"), "preserves a user field: {cfg}");
-    assert!(cfg.contains("fixity: all"), "preserves a non-default: {cfg}");
-    assert!(cfg.contains("notation: markdown"), "fills a reference default: {cfg}");
-    assert!(cfg.contains("identity: lazy"), "fills the identity default: {cfg}");
+    assert!(
+        cfg.contains("maintainer: adam"),
+        "preserves a user field: {cfg}"
+    );
+    assert!(
+        cfg.contains("fixity: all"),
+        "preserves a non-default: {cfg}"
+    );
+    assert!(
+        cfg.contains("notation: markdown"),
+        "fills a reference default: {cfg}"
+    );
+    assert!(
+        cfg.contains("identity: lazy"),
+        "fills the identity default: {cfg}"
+    );
 }
 
 #[test]
@@ -235,7 +253,10 @@ fn check_reports_a_config_spec_newer_than_this_build() {
     let (ok, out) = run(&dir, &["check"]);
     assert!(!ok, "check fails when spec is ahead: {out}");
     assert!(out.contains("spec 99"), "names the declared spec: {out}");
-    assert!(out.contains("upgrade colophon"), "points at the resolution: {out}");
+    assert!(
+        out.contains("upgrade colophon"),
+        "points at the resolution: {out}"
+    );
 }
 
 #[test]
@@ -255,5 +276,8 @@ fn a_command_warns_about_config_that_will_be_ignored_unless_quiet() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&quiet.stderr);
-    assert!(!text.contains("will be ignored"), "COLOPHON_QUIET suppresses it: {text}");
+    assert!(
+        !text.contains("will be ignored"),
+        "COLOPHON_QUIET suppresses it: {text}"
+    );
 }

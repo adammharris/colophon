@@ -61,10 +61,7 @@ impl MetaEditor {
             Some(MetaCarrier::Fenced(kind)) => {
                 MetaEditor::Fenced(Embed::open_or_init(text.as_bytes(), kind)?)
             }
-            None => MetaEditor::Fenced(Embed::open_or_init(
-                text.as_bytes(),
-                default_embed_type(),
-            )?),
+            None => MetaEditor::Fenced(Embed::open_or_init(text.as_bytes(), default_embed_type())?),
         })
     }
 
@@ -189,14 +186,17 @@ mod tests {
     use super::*;
 
     fn carrier_of(path: &str, text: &str) -> Option<MetaCarrier> {
-        crate::document::Document::parse(path, text).unwrap().carrier
+        crate::document::Document::parse(path, text)
+            .unwrap()
+            .carrier
     }
 
     #[cfg(feature = "yaml")]
     #[test]
     fn set_preserves_comments_and_format() {
         let text = "---\n# keep me\ntitle: Old\n---\nbody\n";
-        let out = set_in_text(text, carrier_of("x.md", text), "title", infer_scalar("New")).unwrap();
+        let out =
+            set_in_text(text, carrier_of("x.md", text), "title", infer_scalar("New")).unwrap();
         assert_eq!(out, "---\n# keep me\ntitle: New\n---\nbody\n");
     }
 
@@ -204,9 +204,18 @@ mod tests {
     #[test]
     fn set_in_a_fig_block_stays_fig() {
         let text = "```fig\ntitle = colophon\n```\nbody\n";
-        let out = set_in_text(text, carrier_of("x.md", text), "title", infer_scalar("renamed")).unwrap();
+        let out = set_in_text(
+            text,
+            carrier_of("x.md", text),
+            "title",
+            infer_scalar("renamed"),
+        )
+        .unwrap();
         assert!(out.starts_with("```fig\n"), "fence preserved: {out}");
-        assert!(out.contains("title = renamed"), "fig dialect preserved: {out}");
+        assert!(
+            out.contains("title = renamed"),
+            "fig dialect preserved: {out}"
+        );
         assert!(out.ends_with("```\nbody\n"));
     }
 
@@ -256,7 +265,13 @@ mod tests {
     #[test]
     fn dotted_paths_mix_keys_and_indices() {
         let text = "---\ncontents:\n- a.md\n- b.md\n---\n";
-        let out = set_in_text(text, carrier_of("x.md", text), "contents.1", infer_scalar("c.md")).unwrap();
+        let out = set_in_text(
+            text,
+            carrier_of("x.md", text),
+            "contents.1",
+            infer_scalar("c.md"),
+        )
+        .unwrap();
         assert!(out.contains("- a.md\n- c.md"), "{out}");
     }
 }

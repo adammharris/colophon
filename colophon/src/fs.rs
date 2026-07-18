@@ -211,14 +211,20 @@ impl Capabilities {
     /// [`Storage::capabilities`] default. Every field is the pessimistic value,
     /// so code that checks a capability before relying on it takes the most
     /// defensive branch unless a backend has explicitly earned a lighter one.
-    pub const NONE: Self =
-        Self { atomic_replace: false, durable_sync: false, native_transactions: false };
+    pub const NONE: Self = Self {
+        atomic_replace: false,
+        durable_sync: false,
+        native_transactions: false,
+    };
 
     /// A conventional local filesystem: atomic replacement by rename and durable
     /// fsync, but no native multi-object transaction (that is the journal's job).
     /// What [`StdFs`] reports on every platform colophon targets.
-    pub const LOCAL_FS: Self =
-        Self { atomic_replace: true, durable_sync: true, native_transactions: false };
+    pub const LOCAL_FS: Self = Self {
+        atomic_replace: true,
+        durable_sync: true,
+        native_transactions: false,
+    };
 }
 
 /// The temporary sibling [`Storage::write_atomic`]'s default protocol stages a
@@ -227,7 +233,10 @@ impl Capabilities {
 /// and will not collide with a real document, and a *sibling* so the rename that
 /// follows never crosses a filesystem boundary.
 fn temp_sibling(path: &Path) -> PathBuf {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("document");
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document");
     path.with_file_name(format!(".{name}.colophon-tmp"))
 }
 
@@ -241,7 +250,10 @@ pub struct DirEntry {
 impl DirEntry {
     /// Construct an entry from its path and type.
     pub fn new(path: impl Into<PathBuf>, file_type: FileType) -> Self {
-        Self { path: path.into(), file_type }
+        Self {
+            path: path.into(),
+            file_type,
+        }
     }
 
     /// The full path to the entry.
@@ -271,7 +283,11 @@ pub struct Metadata {
 impl Metadata {
     /// Construct metadata from its parts.
     pub fn new(file_type: FileType, len: u64, modified: Option<SystemTime>) -> Self {
-        Self { file_type, len, modified }
+        Self {
+            file_type,
+            len,
+            modified,
+        }
     }
 
     /// The entry's type.
@@ -330,7 +346,10 @@ impl Storage for StdFs {
         std::fs::read_dir(path)?
             .map(|entry| {
                 let entry = entry?;
-                Ok(DirEntry::new(entry.path(), convert_file_type(entry.file_type()?)))
+                Ok(DirEntry::new(
+                    entry.path(),
+                    convert_file_type(entry.file_type()?),
+                ))
             })
             .collect()
     }
@@ -357,7 +376,11 @@ impl Storage for StdFs {
 
     async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
         let md = std::fs::metadata(path)?;
-        Ok(Metadata::new(convert_file_type(md.file_type()), md.len(), md.modified().ok()))
+        Ok(Metadata::new(
+            convert_file_type(md.file_type()),
+            md.len(),
+            md.modified().ok(),
+        ))
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -432,7 +455,10 @@ pub(crate) struct FailAtWrite {
 impl FailAtWrite {
     /// Fail the `fail_at`th write (0-indexed); let every other one through.
     pub(crate) fn nth(fail_at: usize) -> Self {
-        Self { writes: std::cell::Cell::new(0), fail_at }
+        Self {
+            writes: std::cell::Cell::new(0),
+            fail_at,
+        }
     }
 
     /// Never fail — a counting [`StdFs`]. Pair with
@@ -535,13 +561,19 @@ impl RecordingFs {
     /// A recorder that reports the local-filesystem guarantees, so `write_atomic`
     /// runs its full atomic protocol.
     pub(crate) fn local() -> Self {
-        Self { log: std::cell::RefCell::new(Vec::new()), caps: Capabilities::LOCAL_FS }
+        Self {
+            log: std::cell::RefCell::new(Vec::new()),
+            caps: Capabilities::LOCAL_FS,
+        }
     }
 
     /// A recorder that reports the given capabilities — used to observe the
     /// `atomic_replace: false` fallback taking the plain-write path.
     pub(crate) fn with_caps(caps: Capabilities) -> Self {
-        Self { log: std::cell::RefCell::new(Vec::new()), caps }
+        Self {
+            log: std::cell::RefCell::new(Vec::new()),
+            caps,
+        }
     }
 
     /// The operations recorded so far, in the order they happened.
@@ -562,21 +594,27 @@ impl Storage for RecordingFs {
         StdFs.read_dir(path).await
     }
     async fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
-        self.log.borrow_mut().push(FsEvent::Write(path.to_path_buf()));
+        self.log
+            .borrow_mut()
+            .push(FsEvent::Write(path.to_path_buf()));
         StdFs.write(path, contents).await
     }
     async fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         StdFs.create_dir_all(path).await
     }
     async fn remove_file(&self, path: &Path) -> io::Result<()> {
-        self.log.borrow_mut().push(FsEvent::Remove(path.to_path_buf()));
+        self.log
+            .borrow_mut()
+            .push(FsEvent::Remove(path.to_path_buf()));
         StdFs.remove_file(path).await
     }
     async fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
         StdFs.remove_dir_all(path).await
     }
     async fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        self.log.borrow_mut().push(FsEvent::Rename(from.to_path_buf(), to.to_path_buf()));
+        self.log
+            .borrow_mut()
+            .push(FsEvent::Rename(from.to_path_buf(), to.to_path_buf()));
         StdFs.rename(from, to).await
     }
     async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
@@ -586,7 +624,9 @@ impl Storage for RecordingFs {
         self.caps
     }
     async fn sync(&self, path: &Path) -> io::Result<()> {
-        self.log.borrow_mut().push(FsEvent::Sync(path.to_path_buf()));
+        self.log
+            .borrow_mut()
+            .push(FsEvent::Sync(path.to_path_buf()));
         StdFs.sync(path).await
     }
 }
@@ -646,13 +686,25 @@ pub struct FileType {
 
 impl FileType {
     /// A regular file.
-    pub const FILE: FileType = FileType { is_dir: false, is_file: true, is_symlink: false };
+    pub const FILE: FileType = FileType {
+        is_dir: false,
+        is_file: true,
+        is_symlink: false,
+    };
 
     /// A directory.
-    pub const DIR: FileType = FileType { is_dir: true, is_file: false, is_symlink: false };
+    pub const DIR: FileType = FileType {
+        is_dir: true,
+        is_file: false,
+        is_symlink: false,
+    };
 
     /// A symbolic link.
-    pub const SYMLINK: FileType = FileType { is_dir: false, is_file: false, is_symlink: true };
+    pub const SYMLINK: FileType = FileType {
+        is_dir: false,
+        is_file: false,
+        is_symlink: true,
+    };
 
     /// Whether this is a regular file.
     pub fn is_file(&self) -> bool {
@@ -705,7 +757,11 @@ mod tests {
         // edit that quietly flips one has to change this line too.
         assert_eq!(
             Capabilities::NONE,
-            Capabilities { atomic_replace: false, durable_sync: false, native_transactions: false }
+            Capabilities {
+                atomic_replace: false,
+                durable_sync: false,
+                native_transactions: false
+            }
         );
     }
 
@@ -754,7 +810,11 @@ mod tests {
         let err = block_on(FailingRename.write_atomic(&target, b"new")).unwrap_err();
 
         assert!(err.to_string().contains("rename failed"), "{err}");
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old", "target was touched");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "old",
+            "target was touched"
+        );
         assert!(!temp.exists(), "the staging file was left behind");
     }
 

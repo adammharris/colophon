@@ -69,7 +69,8 @@ pub fn whole_file_format(path: &Path) -> Option<fig::Format> {
 /// is how an arbitrary file gains workspace-linked metadata without being able
 /// to carry frontmatter itself.
 pub fn is_opaque_payload(path: &Path) -> bool {
-    crate::content::ContentFormat::from_extension(path).is_none() && whole_file_format(path).is_none()
+    crate::content::ContentFormat::from_extension(path).is_none()
+        && whole_file_format(path).is_none()
 }
 
 /// The canonical whole-file extension for a metadata `format` — the inverse of
@@ -258,7 +259,12 @@ impl Document {
             },
             None => (Value::Null, text.to_owned(), None),
         };
-        Ok(Self { path, meta, body, carrier })
+        Ok(Self {
+            path,
+            meta,
+            body,
+            carrier,
+        })
     }
 
     /// The document's path.
@@ -313,7 +319,10 @@ mod tests {
         let doc = Document::parse("index.md", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));
         assert_eq!(doc.body, "# Body\n\nhello\n");
-        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterYaml)));
+        assert_eq!(
+            doc.carrier,
+            Some(MetaCarrier::Fenced(EmbedType::FrontmatterYaml))
+        );
         assert!(doc.has_meta());
     }
 
@@ -327,7 +336,10 @@ mod tests {
             Some("colophon")
         );
         assert_eq!(doc.body, "# Body\n");
-        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterFig)));
+        assert_eq!(
+            doc.carrier,
+            Some(MetaCarrier::Fenced(EmbedType::FrontmatterFig))
+        );
         assert!(doc.has_meta());
     }
 
@@ -337,7 +349,10 @@ mod tests {
         let text = ";;;\n{\"title\": \"Root\"}\n;;;\nbody\n";
         let doc = Document::parse("note.md", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));
-        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterJson)));
+        assert_eq!(
+            doc.carrier,
+            Some(MetaCarrier::Fenced(EmbedType::FrontmatterJson))
+        );
     }
 
     #[cfg(feature = "yaml")]
@@ -347,7 +362,10 @@ mod tests {
         let doc = Document::parse("note.md", text).unwrap();
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Tail"));
         assert_eq!(doc.body, "# Body first\n");
-        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::EndmatterYaml)));
+        assert_eq!(
+            doc.carrier,
+            Some(MetaCarrier::Fenced(EmbedType::EndmatterYaml))
+        );
     }
 
     #[cfg(feature = "yaml")]
@@ -355,7 +373,10 @@ mod tests {
     fn a_config_file_is_a_document_whose_content_is_all_metadata() {
         let text = "title: ID registry\npart_of: index.md\nregistry:\n  abc: a.md\n";
         let doc = Document::parse("registry.yaml", text).unwrap();
-        assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("ID registry"));
+        assert_eq!(
+            doc.meta.get("title").and_then(Value::as_str),
+            Some("ID registry")
+        );
         assert_eq!(
             doc.meta.get("part_of").and_then(Value::as_str),
             Some("index.md")
@@ -370,7 +391,10 @@ mod tests {
     fn a_fig_config_file_parses_the_dialect() {
         let text = "title = settings\npart_of = index.md\n";
         let doc = Document::parse("settings.figl", text).unwrap();
-        assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("settings"));
+        assert_eq!(
+            doc.meta.get("title").and_then(Value::as_str),
+            Some("settings")
+        );
         assert_eq!(doc.carrier, Some(MetaCarrier::WholeFile(fig::Format::Fig)));
     }
 
@@ -383,7 +407,10 @@ mod tests {
             EmbedStyle::HtmlCode,
             EmbedStyle::Separate,
         ] {
-            assert_eq!(EmbedStyle::from_config_str(style.as_config_str()), Some(style));
+            assert_eq!(
+                EmbedStyle::from_config_str(style.as_config_str()),
+                Some(style)
+            );
         }
         assert_eq!(EmbedStyle::from_config_str("nonsense"), None);
     }
@@ -393,19 +420,46 @@ mod tests {
         use fig::Format;
         let fenced = |k| Some(MetaCarrier::Fenced(k));
         // Delimited: the three delimiter formats, but the fig dialect has none.
-        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Yaml), fenced(EmbedType::FrontmatterYaml));
-        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Toml), fenced(EmbedType::PlusToml));
-        assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Json), fenced(EmbedType::FrontmatterJson));
+        assert_eq!(
+            embed_carrier(EmbedStyle::Delimited, Format::Yaml),
+            fenced(EmbedType::FrontmatterYaml)
+        );
+        assert_eq!(
+            embed_carrier(EmbedStyle::Delimited, Format::Toml),
+            fenced(EmbedType::PlusToml)
+        );
+        assert_eq!(
+            embed_carrier(EmbedStyle::Delimited, Format::Json),
+            fenced(EmbedType::FrontmatterJson)
+        );
         assert_eq!(embed_carrier(EmbedStyle::Delimited, Format::Fig), None);
         // Code block: fig lands in the ```fig block; the rest in ```lang blocks.
-        assert_eq!(embed_carrier(EmbedStyle::CodeBlock, Format::Fig), fenced(EmbedType::FrontmatterFig));
-        assert_eq!(embed_carrier(EmbedStyle::CodeBlock, Format::Yaml), fenced(EmbedType::FencedYaml));
+        assert_eq!(
+            embed_carrier(EmbedStyle::CodeBlock, Format::Fig),
+            fenced(EmbedType::FrontmatterFig)
+        );
+        assert_eq!(
+            embed_carrier(EmbedStyle::CodeBlock, Format::Yaml),
+            fenced(EmbedType::FencedYaml)
+        );
         // HTML islands, both shapes.
-        assert_eq!(embed_carrier(EmbedStyle::HtmlScript, Format::Json), fenced(EmbedType::HtmlScriptJson));
-        assert_eq!(embed_carrier(EmbedStyle::HtmlCode, Format::Toml), fenced(EmbedType::HtmlCodeToml));
+        assert_eq!(
+            embed_carrier(EmbedStyle::HtmlScript, Format::Json),
+            fenced(EmbedType::HtmlScriptJson)
+        );
+        assert_eq!(
+            embed_carrier(EmbedStyle::HtmlCode, Format::Toml),
+            fenced(EmbedType::HtmlCodeToml)
+        );
         // Separate is a whole-file sidecar in the chosen format (any format).
-        assert_eq!(embed_carrier(EmbedStyle::Separate, Format::Yaml), Some(MetaCarrier::WholeFile(Format::Yaml)));
-        assert_eq!(embed_carrier(EmbedStyle::Separate, Format::Fig), Some(MetaCarrier::WholeFile(Format::Fig)));
+        assert_eq!(
+            embed_carrier(EmbedStyle::Separate, Format::Yaml),
+            Some(MetaCarrier::WholeFile(Format::Yaml))
+        );
+        assert_eq!(
+            embed_carrier(EmbedStyle::Separate, Format::Fig),
+            Some(MetaCarrier::WholeFile(Format::Fig))
+        );
     }
 
     #[test]
@@ -431,7 +485,10 @@ mod tests {
     fn crlf_fences_are_handled() {
         let text = "---\r\ntitle: Root\r\n---\r\nbody\r\n";
         let doc = Document::parse("x.md", text).unwrap();
-        assert_eq!(doc.carrier, Some(MetaCarrier::Fenced(EmbedType::FrontmatterYaml)));
+        assert_eq!(
+            doc.carrier,
+            Some(MetaCarrier::Fenced(EmbedType::FrontmatterYaml))
+        );
         assert_eq!(doc.body, "body\r\n");
         // Exact scalar — fig ≥ 2.1.1 treats \r\n as a single line break.
         assert_eq!(doc.meta.get("title").and_then(Value::as_str), Some("Root"));

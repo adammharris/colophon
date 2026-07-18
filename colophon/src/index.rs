@@ -430,10 +430,15 @@ impl FileIndex {
                 MetaCarrier::Fenced(_) => {
                     let mut editor = MetaEditor::open_or_init(&self.host_text, Some(self.carrier))?;
                     for (id, value) in &current {
-                        let fig_value =
-                            value.clone().map(fig::Value::Str).unwrap_or(fig::Value::Null);
+                        let fig_value = value
+                            .clone()
+                            .map(fig::Value::Str)
+                            .unwrap_or(fig::Value::Null);
                         editor.set_value(
-                            &[fig::Segment::Key("registry"), fig::Segment::Key(id.as_str())],
+                            &[
+                                fig::Segment::Key("registry"),
+                                fig::Segment::Key(id.as_str()),
+                            ],
                             fig_value,
                         )?;
                     }
@@ -452,9 +457,15 @@ impl FileIndex {
             if self.persisted.get(id) == Some(value) {
                 continue;
             }
-            let fig_value = value.clone().map(fig::Value::Str).unwrap_or(fig::Value::Null);
+            let fig_value = value
+                .clone()
+                .map(fig::Value::Str)
+                .unwrap_or(fig::Value::Null);
             editor.set_value(
-                &[fig::Segment::Key("registry"), fig::Segment::Key(id.as_str())],
+                &[
+                    fig::Segment::Key("registry"),
+                    fig::Segment::Key(id.as_str()),
+                ],
                 fig_value,
             )?;
         }
@@ -540,9 +551,17 @@ impl IndexStore for FileIndex {
     }
 
     fn rollback(&mut self) {
-        let Some(saved) = self.saved.take() else { return };
-        let FileIndexState { live, tombstones, host_text, persisted, has_registry_key, dirty } =
-            *saved;
+        let Some(saved) = self.saved.take() else {
+            return;
+        };
+        let FileIndexState {
+            live,
+            tombstones,
+            host_text,
+            persisted,
+            has_registry_key,
+            dirty,
+        } = *saved;
         self.live = live;
         self.tombstones = tombstones;
         self.host_text = host_text;
@@ -613,18 +632,33 @@ mod tests {
         let host = "title: ID registry\npart_of: index.md\nregistry:\n  theirss: other.md\n";
         ix.set_host("registry.yaml", host).unwrap();
 
-        let (path, rendered) = ix.pending_write().unwrap().expect("dirty, and now has a home");
+        let (path, rendered) = ix
+            .pending_write()
+            .unwrap()
+            .expect("dirty, and now has a home");
         assert_eq!(path, PathBuf::from("registry.yaml"));
-        assert!(rendered.contains("fixed.md"), "this store's record must land: {rendered}");
-        assert!(rendered.contains("other.md"), "the host's record must survive: {rendered}");
-        assert!(rendered.contains("part_of"), "the host's self-description survives: {rendered}");
+        assert!(
+            rendered.contains("fixed.md"),
+            "this store's record must land: {rendered}"
+        );
+        assert!(
+            rendered.contains("other.md"),
+            "the host's record must survive: {rendered}"
+        );
+        assert!(
+            rendered.contains("part_of"),
+            "the host's self-description survives: {rendered}"
+        );
 
         // The host's record was not adopted as live in memory — but the next
         // parse of what we just wrote reads both, which is what makes that safe.
         assert_eq!(ix.resolve(&Id("theirss".into())), None);
         let reread = FileIndex::parse(Path::new("registry.yaml"), &rendered).unwrap();
         assert_eq!(reread.resolve(&mine), Some(PathBuf::from("fixed.md")));
-        assert_eq!(reread.resolve(&Id("theirss".into())), Some(PathBuf::from("other.md")));
+        assert_eq!(
+            reread.resolve(&Id("theirss".into())),
+            Some(PathBuf::from("other.md"))
+        );
     }
 
     #[test]
@@ -686,9 +720,15 @@ mod tests {
         assert!(text.contains("mmmmmmm: null"), "{text}");
 
         let back = FileIndex::parse(Path::new("registry.yaml"), &text).unwrap();
-        assert_eq!(back.resolve(&Id("bcdfghj".into())), Some(PathBuf::from("notes/a.md")));
+        assert_eq!(
+            back.resolve(&Id("bcdfghj".into())),
+            Some(PathBuf::from("notes/a.md"))
+        );
         assert_eq!(back.resolve(&Id("mmmmmmm".into())), None);
-        assert!(back.is_known(&Id("mmmmmmm".into())), "tombstone survives the round-trip");
+        assert!(
+            back.is_known(&Id("mmmmmmm".into())),
+            "tombstone survives the round-trip"
+        );
         assert!(back.is_tombstoned(&Id("mmmmmmm".into())));
         assert!(!back.is_dirty());
     }
@@ -728,16 +768,30 @@ registry:
 The workspace's ID registry lives in my frontmatter.
 ";
         let mut ix = FileIndex::parse(Path::new("registry.md"), host).unwrap();
-        assert_eq!(ix.resolve(&Id("bcdfghj".into())), Some(PathBuf::from("a.md")));
+        assert_eq!(
+            ix.resolve(&Id("bcdfghj".into())),
+            Some(PathBuf::from("a.md"))
+        );
         ix.set_path(&Id("bcdfghj".into()), Path::new("moved/a.md"));
         let out = ix.render().unwrap();
-        assert!(out.starts_with("---
-title: Registry"), "fences kept: {out}");
+        assert!(
+            out.starts_with(
+                "---
+title: Registry"
+            ),
+            "fences kept: {out}"
+        );
         assert!(out.contains("bcdfghj: moved/a.md"), "{out}");
-        assert!(out.ends_with("The workspace's ID registry lives in my frontmatter.\n"), "body kept: {out}");
+        assert!(
+            out.ends_with("The workspace's ID registry lives in my frontmatter.\n"),
+            "body kept: {out}"
+        );
 
         let back = FileIndex::parse(Path::new("registry.md"), &out).unwrap();
-        assert_eq!(back.resolve(&Id("bcdfghj".into())), Some(PathBuf::from("moved/a.md")));
+        assert_eq!(
+            back.resolve(&Id("bcdfghj".into())),
+            Some(PathBuf::from("moved/a.md"))
+        );
     }
 
     #[test]

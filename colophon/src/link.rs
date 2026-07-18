@@ -181,8 +181,12 @@ impl LinkStyle {
     pub fn from_axes(notation: Notation, path_style: PathStyle) -> Self {
         match (notation, path_style) {
             (Notation::Markdown | Notation::Wikilink, PathStyle::Root) => Self::MarkdownRoot,
-            (Notation::Markdown | Notation::Wikilink, PathStyle::Relative) => Self::MarkdownRelative,
-            (Notation::Markdown | Notation::Wikilink, PathStyle::Canonical) => Self::MarkdownCanonical,
+            (Notation::Markdown | Notation::Wikilink, PathStyle::Relative) => {
+                Self::MarkdownRelative
+            }
+            (Notation::Markdown | Notation::Wikilink, PathStyle::Canonical) => {
+                Self::MarkdownCanonical
+            }
             (Notation::Bare, PathStyle::Root) => Self::PlainRoot,
             (Notation::Bare, PathStyle::Relative) => Self::PlainRelative,
             (Notation::Bare, PathStyle::Canonical) => Self::PlainCanonical,
@@ -305,7 +309,10 @@ pub fn format_link(style: LinkStyle, from: &Path, target: &Path, title: &str) ->
 /// each word is capitalized (`utility_index.md` → `Utility Index`). The fallback
 /// when a target document declares no `title`.
 pub fn path_to_title(path: &Path) -> String {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     stem.split(['_', '-', ' '])
         .filter(|w| !w.is_empty())
         .map(|word| {
@@ -348,7 +355,11 @@ pub fn slug(title: &str) -> String {
         }
         // Any other character (punctuation, symbols) is dropped.
     }
-    if out.is_empty() { "untitled".to_string() } else { out }
+    if out.is_empty() {
+        "untitled".to_string()
+    } else {
+        out
+    }
 }
 
 /// The target scheme marking a link-by-ID: `id:<id>`.
@@ -361,7 +372,9 @@ pub const LEGACY_ID_SCHEME: &str = "colophon:";
 /// Strip the ID scheme from a target, accepting the current `id:` spelling or
 /// the legacy `colophon:` one. `None` when the target names no ID.
 pub fn strip_id_scheme(target: &str) -> Option<&str> {
-    target.strip_prefix(ID_SCHEME).or_else(|| target.strip_prefix(LEGACY_ID_SCHEME))
+    target
+        .strip_prefix(ID_SCHEME)
+        .or_else(|| target.strip_prefix(LEGACY_ID_SCHEME))
 }
 
 /// Render an ID as a link target (`id:<id>`).
@@ -504,10 +517,24 @@ pub fn format_reference(
         // a path link, mirroring the pre-existing `authored_target` fallback.
         Addressing::Id => match id {
             Some(id) => wrap(style.wrapper, &id_target(id), title, style.label),
-            None => format_path(Wrapper::Markdown, style.path_style, from, to, title, style.label),
+            None => format_path(
+                Wrapper::Markdown,
+                style.path_style,
+                from,
+                to,
+                title,
+                style.label,
+            ),
         },
         Addressing::Alias => wrap_alias(title),
-        Addressing::Path => format_path(style.wrapper, style.path_style, from, to, title, style.label),
+        Addressing::Path => format_path(
+            style.wrapper,
+            style.path_style,
+            from,
+            to,
+            title,
+            style.label,
+        ),
     }
 }
 
@@ -524,7 +551,12 @@ fn format_path(
         // Preserve the exact markdown/plain behavior (labeled vs bare) that
         // `LinkStyle` already encodes — the `label` axis does not apply here.
         Wrapper::Markdown => format_link(path_style, from, to, title),
-        Wrapper::Wikilink => wrap(Wrapper::Wikilink, &path_text(path_style, from, to), title, label),
+        Wrapper::Wikilink => wrap(
+            Wrapper::Wikilink,
+            &path_text(path_style, from, to),
+            title,
+            label,
+        ),
     }
 }
 
@@ -757,7 +789,11 @@ pub fn scan_body_links(path: &Path, body: &str) -> Vec<BodyLink> {
     let mut out: Vec<BodyLink> = scan_wikilinks(path, body)
         .into_iter()
         .map(|wl| BodyLink {
-            link: Link { label: wl.label, target: wl.target, wikilink: true },
+            link: Link {
+                label: wl.label,
+                target: wl.target,
+                wikilink: true,
+            },
             span: wl.span,
         })
         .collect();
@@ -769,7 +805,10 @@ pub fn scan_body_links(path: &Path, body: &str) -> Vec<BodyLink> {
         if link.label.is_none() || link.wikilink {
             continue;
         }
-        if out.iter().any(|b| b.span.start < span.end && span.start < b.span.end) {
+        if out
+            .iter()
+            .any(|b| b.span.start < span.end && span.start < b.span.end)
+        {
             continue;
         }
         out.push(BodyLink { link, span });
@@ -814,7 +853,10 @@ fn scan_outside_spans(body: &str, code_spans: &[Range<usize>]) -> Vec<Wikilink> 
     let mut cursor = 0;
     for span in code_spans {
         if cursor < span.start {
-            out.extend(shift_spans(parse_wikilinks(&body[cursor..span.start]), cursor));
+            out.extend(shift_spans(
+                parse_wikilinks(&body[cursor..span.start]),
+                cursor,
+            ));
         }
         cursor = cursor.max(span.end);
     }
@@ -827,7 +869,10 @@ fn scan_outside_spans(body: &str, code_spans: &[Range<usize>]) -> Vec<Wikilink> 
 fn shift_spans(links: Vec<Wikilink>, offset: usize) -> Vec<Wikilink> {
     links
         .into_iter()
-        .map(|link| Wikilink { span: link.span.start + offset..link.span.end + offset, ..link })
+        .map(|link| Wikilink {
+            span: link.span.start + offset..link.span.end + offset,
+            ..link
+        })
         .collect()
 }
 
@@ -858,6 +903,26 @@ pub fn normalize(path: impl AsRef<Path>) -> PathBuf {
         }
     }
     out.iter().collect()
+}
+
+/// Whether `path`, resolved against a workspace root, would land *outside* it.
+///
+/// Two ways a workspace-relative path can escape the tree it is joined onto:
+/// an **absolute** path (or a Windows drive prefix), which `root.join(path)`
+/// jumps to wholesale, ignoring the root entirely; and one whose
+/// [`normalize`]d form still leads with `..`, a climb above the root that the
+/// `parent/..` folding could not cancel. Either is refused by the read/write
+/// guards ([`crate::Workspace`]'s `load`, [`crate::ChangeSet::apply`]) so a
+/// relation target — which is *data*, authored by whoever wrote the document —
+/// can never name a file the workspace does not contain.
+///
+/// A path that stays within the root (`notes/a.md`, `../sibling/b.md` where the
+/// document is nested deeply enough that the `..` cancels) returns `false`.
+pub fn escapes_root(path: impl AsRef<Path>) -> bool {
+    matches!(
+        normalize(path).components().next(),
+        Some(Component::ParentDir | Component::RootDir | Component::Prefix(_))
+    )
 }
 
 /// Resolve a link target written in `doc` to a normalized path in the same
@@ -918,7 +983,10 @@ mod tests {
         assert_eq!(slug("!!!"), "untitled");
         assert_eq!(slug(""), "untitled");
         // The everyday case is the inverse of path_to_title.
-        assert_eq!(path_to_title(std::path::Path::new("my-great-note.md")), "My Great Note");
+        assert_eq!(
+            path_to_title(std::path::Path::new("my-great-note.md")),
+            "My Great Note"
+        );
     }
 
     #[test]
@@ -962,7 +1030,10 @@ mod tests {
         assert_eq!(l.label.as_deref(), Some("Archived Documents"));
         assert_eq!(l.target, "/Archive/Archived documents.md");
         // Round-trips: the space forces the angle brackets back on render.
-        assert_eq!(l.render(), "[Archived Documents](</Archive/Archived documents.md>)");
+        assert_eq!(
+            l.render(),
+            "[Archived Documents](</Archive/Archived documents.md>)"
+        );
 
         // A bare angle-bracketed target is unwrapped on read (lenient) and
         // written back bare (diaryx reads a bare `<…>` as a literal path).
@@ -1015,19 +1086,31 @@ mod tests {
         }
         // Wikilink has no bare/bracketed split, so it maps through the Markdown
         // family and its path text follows the path style.
-        assert_eq!(LinkStyle::from_axes(Wikilink, Canonical), LinkStyle::MarkdownCanonical);
-        assert_eq!(Notation::from_wrapper(Wrapper::Wikilink, LinkStyle::MarkdownRoot), Wikilink);
+        assert_eq!(
+            LinkStyle::from_axes(Wikilink, Canonical),
+            LinkStyle::MarkdownCanonical
+        );
+        assert_eq!(
+            Notation::from_wrapper(Wrapper::Wikilink, LinkStyle::MarkdownRoot),
+            Wikilink
+        );
         assert_eq!(Notation::from_config_str("bare"), Some(Bare));
         assert_eq!(PathStyle::from_config_str("canonical"), Some(Canonical));
         assert_eq!(LinkStyle::default(), LinkStyle::MarkdownRoot);
-        assert_eq!(path_to_title(Path::new("Folder/utility_index.md")), "Utility Index");
+        assert_eq!(
+            path_to_title(Path::new("Folder/utility_index.md")),
+            "Utility Index"
+        );
     }
 
     #[test]
     fn the_two_new_link_styles_render_bracketed_canonical_and_bare_root() {
         let from = Path::new("a/b.md");
         let to = Path::new("c/d.md");
-        assert_eq!(format_link(LinkStyle::MarkdownCanonical, from, to, "D"), "[D](c/d.md)");
+        assert_eq!(
+            format_link(LinkStyle::MarkdownCanonical, from, to, "D"),
+            "[D](c/d.md)"
+        );
         assert_eq!(format_link(LinkStyle::PlainRoot, from, to, "D"), "/c/d.md");
     }
 
@@ -1083,7 +1166,10 @@ mod tests {
         assert_eq!(links[1].target, "colophon:ajp7eq");
         assert_eq!(links[1].label.as_deref(), Some("My file"));
         assert_eq!(&body[links[1].span.clone()], "[[colophon:ajp7eq|My file]]");
-        assert_eq!(links[1].id_target(), Some(crate::identity::Id("ajp7eq".into())));
+        assert_eq!(
+            links[1].id_target(),
+            Some(crate::identity::Id("ajp7eq".into()))
+        );
     }
 
     #[test]
@@ -1118,7 +1204,8 @@ mod tests {
 
         let code_start = body.find('`').unwrap();
         let code_end = body.rfind('`').unwrap() + 1;
-        let kept = exclude_code_spans(links, &[code_start..code_end]);
+        let code_span = code_start..code_end;
+        let kept = exclude_code_spans(links, std::slice::from_ref(&code_span));
 
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].target, "notes/a.md");
@@ -1126,8 +1213,14 @@ mod tests {
 
     #[test]
     fn relative_walks_up_and_down() {
-        assert_eq!(relative(Path::new("docs"), Path::new("README.md")), "../README.md");
-        assert_eq!(relative(Path::new(""), Path::new("docs/design.md")), "docs/design.md");
+        assert_eq!(
+            relative(Path::new("docs"), Path::new("README.md")),
+            "../README.md"
+        );
+        assert_eq!(
+            relative(Path::new(""), Path::new("docs/design.md")),
+            "docs/design.md"
+        );
         assert_eq!(relative(Path::new("a/b"), Path::new("a/b/c.md")), "c.md");
         assert_eq!(relative(Path::new("a/b"), Path::new("a/b")), ".");
     }
@@ -1148,7 +1241,10 @@ mod tests {
         assert_eq!(bare.label, None);
         assert_eq!(bare.render(), "[[notes/a.md]]");
         // Retarget keeps the wikilink wrapper and label.
-        assert_eq!(l.with_target("id:zzzzzz9").render(), "[[id:zzzzzz9|My File]]");
+        assert_eq!(
+            l.with_target("id:zzzzzz9").render(),
+            "[[id:zzzzzz9|My File]]"
+        );
     }
 
     #[test]
@@ -1157,8 +1253,14 @@ mod tests {
         assert_eq!(strip_id_scheme("colophon:ajp7eqb"), Some("ajp7eqb"));
         assert_eq!(strip_id_scheme("notes/a.md"), None);
         // New links are authored in the `id:` spelling.
-        assert_eq!(id_target(&crate::identity::Id("ajp7eqb".into())), "id:ajp7eqb");
-        assert_eq!(Link::parse("colophon:ajp7eqb").id_target().unwrap().0, "ajp7eqb");
+        assert_eq!(
+            id_target(&crate::identity::Id("ajp7eqb".into())),
+            "id:ajp7eqb"
+        );
+        assert_eq!(
+            Link::parse("colophon:ajp7eqb").id_target().unwrap().0,
+            "ajp7eqb"
+        );
     }
 
     #[test]
@@ -1175,59 +1277,129 @@ mod tests {
 
         // Markdown + path → the classic LinkStyle rendering.
         assert_eq!(
-            format_reference(s(Wrapper::Markdown, Addressing::Path, false), from, to, None, "A"),
+            format_reference(
+                s(Wrapper::Markdown, Addressing::Path, false),
+                from,
+                to,
+                None,
+                "A"
+            ),
             "[A](/Archive/a.md)"
         );
         // Wikilink + path, label off vs on.
         assert_eq!(
-            format_reference(s(Wrapper::Wikilink, Addressing::Path, false), from, to, None, "A"),
+            format_reference(
+                s(Wrapper::Wikilink, Addressing::Path, false),
+                from,
+                to,
+                None,
+                "A"
+            ),
             "[[/Archive/a.md]]"
         );
         assert_eq!(
-            format_reference(s(Wrapper::Wikilink, Addressing::Path, true), from, to, None, "A"),
+            format_reference(
+                s(Wrapper::Wikilink, Addressing::Path, true),
+                from,
+                to,
+                None,
+                "A"
+            ),
             "[[/Archive/a.md|A]]"
         );
         // Markdown + id: bare when unlabeled (the diaryx-shaped id link), a
         // titled markdown link when labeled.
         assert_eq!(
-            format_reference(s(Wrapper::Markdown, Addressing::Id, false), from, to, Some(&id), "A"),
+            format_reference(
+                s(Wrapper::Markdown, Addressing::Id, false),
+                from,
+                to,
+                Some(&id),
+                "A"
+            ),
             "id:ajp7eqb"
         );
         assert_eq!(
-            format_reference(s(Wrapper::Markdown, Addressing::Id, true), from, to, Some(&id), "A"),
+            format_reference(
+                s(Wrapper::Markdown, Addressing::Id, true),
+                from,
+                to,
+                Some(&id),
+                "A"
+            ),
             "[A](id:ajp7eqb)"
         );
         // Wikilink + id, no label / with label.
         assert_eq!(
-            format_reference(s(Wrapper::Wikilink, Addressing::Id, false), from, to, Some(&id), "A"),
+            format_reference(
+                s(Wrapper::Wikilink, Addressing::Id, false),
+                from,
+                to,
+                Some(&id),
+                "A"
+            ),
             "[[id:ajp7eqb]]"
         );
         assert_eq!(
-            format_reference(s(Wrapper::Wikilink, Addressing::Id, true), from, to, Some(&id), "A"),
+            format_reference(
+                s(Wrapper::Wikilink, Addressing::Id, true),
+                from,
+                to,
+                Some(&id),
+                "A"
+            ),
             "[[id:ajp7eqb|A]]"
         );
         // Alias is a bare-name wikilink, even if markdown was requested.
         assert_eq!(
-            format_reference(s(Wrapper::Markdown, Addressing::Alias, false), from, to, None, "My File"),
+            format_reference(
+                s(Wrapper::Markdown, Addressing::Alias, false),
+                from,
+                to,
+                None,
+                "My File"
+            ),
             "[[My File]]"
         );
         // Id addressing with no id available degrades to a path link.
         assert_eq!(
-            format_reference(s(Wrapper::Wikilink, Addressing::Id, true), from, to, None, "A"),
+            format_reference(
+                s(Wrapper::Wikilink, Addressing::Id, true),
+                from,
+                to,
+                None,
+                "A"
+            ),
             "[A](/Archive/a.md)"
         );
     }
 
     #[test]
     fn reference_style_config_round_trips_and_normalizes() {
-        assert_eq!(Wrapper::from_config_str("wikilink"), Some(Wrapper::Wikilink));
-        assert_eq!(Addressing::from_config_str("alias"), Some(Addressing::Alias));
+        assert_eq!(
+            Wrapper::from_config_str("wikilink"),
+            Some(Wrapper::Wikilink)
+        );
+        assert_eq!(
+            Addressing::from_config_str("alias"),
+            Some(Addressing::Alias)
+        );
         assert_eq!(Wrapper::Wikilink.as_config_str(), "wikilink");
         assert_eq!(Addressing::Id.as_config_str(), "id");
         // markdown + alias is impossible; normalization forces wikilink.
-        let n = ReferenceStyle { addressing: Addressing::Alias, ..ReferenceStyle::default() }.normalized();
+        let n = ReferenceStyle {
+            addressing: Addressing::Alias,
+            ..ReferenceStyle::default()
+        }
+        .normalized();
         assert_eq!(n.wrapper, Wrapper::Wikilink);
-        assert!(ReferenceStyle { addressing: Addressing::Id, ..ReferenceStyle::default() }.registers());
+        assert!(
+            ReferenceStyle {
+                addressing: Addressing::Id,
+                ..ReferenceStyle::default()
+            }
+            .registers()
+        );
         assert!(!ReferenceStyle::default().registers());
     }
 
@@ -1236,7 +1408,10 @@ mod tests {
         let from = Path::new("a/b/hw.md");
         let to = Path::new("a/c/x.md");
         assert_eq!(path_text(LinkStyle::MarkdownRoot, from, to), "/a/c/x.md");
-        assert_eq!(path_text(LinkStyle::MarkdownRelative, from, to), "../c/x.md");
+        assert_eq!(
+            path_text(LinkStyle::MarkdownRelative, from, to),
+            "../c/x.md"
+        );
         assert_eq!(path_text(LinkStyle::PlainCanonical, from, to), "a/c/x.md");
     }
 }

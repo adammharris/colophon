@@ -176,7 +176,10 @@ impl RelationSet {
     /// configured and carries one. `None` means "inherit the workspace default"
     /// — the caller falls back to its own default style.
     pub fn style_for(&self, name: &str) -> Option<ReferenceStyle> {
-        self.relations.iter().find(|r| r.name == name).and_then(|r| r.style)
+        self.relations
+            .iter()
+            .find(|r| r.name == name)
+            .and_then(|r| r.style)
     }
 
     /// Overlay per-relation reference styles by name (builder-style) — the
@@ -188,7 +191,10 @@ impl RelationSet {
     /// document (see [`WorkspaceConfig::resolved_relation_styles`]).
     ///
     /// [`WorkspaceConfig::resolved_relation_styles`]: crate::config::WorkspaceConfig::resolved_relation_styles
-    pub fn with_styles(mut self, styles: &std::collections::BTreeMap<String, ReferenceStyle>) -> Self {
+    pub fn with_styles(
+        mut self,
+        styles: &std::collections::BTreeMap<String, ReferenceStyle>,
+    ) -> Self {
         for relation in &mut self.relations {
             if let Some(style) = styles.get(&relation.name) {
                 relation.style = Some(*style);
@@ -261,15 +267,24 @@ mod tests {
         let set = RelationSet::diaryx();
         let edges = set.edges(&d.meta);
         assert_eq!(edges.len(), 3);
-        assert!(edges.contains(&Edge { relation: "contents".into(), target: "a.md".into() }));
-        assert!(edges.contains(&Edge { relation: "part_of".into(), target: "../root.md".into() }));
+        assert!(edges.contains(&Edge {
+            relation: "contents".into(),
+            target: "a.md".into()
+        }));
+        assert!(edges.contains(&Edge {
+            relation: "part_of".into(),
+            target: "../root.md".into()
+        }));
     }
 
     #[test]
     fn children_reads_the_spanning_relation() {
         let d = doc("---\ncontents:\n- a.md\n- b.md\n---\nbody\n");
         let set = RelationSet::diaryx();
-        assert_eq!(set.children(&d.meta), vec!["a.md".to_string(), "b.md".to_string()]);
+        assert_eq!(
+            set.children(&d.meta),
+            vec!["a.md".to_string(), "b.md".to_string()]
+        );
         assert_eq!(set.spanning_relation(), Some("contents"));
     }
 
@@ -303,7 +318,12 @@ mod tests {
         assert_eq!(set.style_for("part_of"), None);
         // A name with no matching relation is ignored, not an error.
         let orphan = BTreeMap::from([("nonexistent".to_string(), alias)]);
-        assert!(RelationSet::diaryx().with_styles(&orphan).style_for("contents").is_none());
+        assert!(
+            RelationSet::diaryx()
+                .with_styles(&orphan)
+                .style_for("contents")
+                .is_none()
+        );
     }
 
     #[test]
@@ -314,6 +334,9 @@ mod tests {
             .with(Relation::one("whole").inverse("part"))
             .spanning("part");
         let d = doc("---\npart:\n- one.md\n- two.md\n---\nbody\n");
-        assert_eq!(set.children(&d.meta), vec!["one.md".to_string(), "two.md".to_string()]);
+        assert_eq!(
+            set.children(&d.meta),
+            vec!["one.md".to_string(), "two.md".to_string()]
+        );
     }
 }

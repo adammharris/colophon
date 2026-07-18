@@ -15,6 +15,13 @@ need for day-to-day use.
 > links from a root document and the whole workspace unfolds. See
 > [DESIGN.md](DESIGN.md) for the reasoning behind that idea.
 
+> **The transcripts below are executable.** Every command block marked as part of
+> the walkthrough is run in CI, in order, against a real workspace
+> (`ci/check-getting-started.sh`). If the CLI changes so a command in this guide
+> stops working, the build fails — so what you read here is what the current
+> binary does. (Random IDs and absolute paths in the output will differ on your
+> machine.)
+
 ---
 
 ## 1. The mental model
@@ -43,8 +50,8 @@ Three ideas carry everything else.
   | `contents` | parent → child   | "this document contains these"             |
   | `part_of`  | child → parent   | the inverse — "this belongs to that"       |
   | `links`    | any → any        | a loose cross-reference (an *overlay* link) |
-  | `registry` | root → registry  | where stable IDs are recorded (§7)         |
-  | `config`   | root → config    | where workspace settings live (§8)         |
+  | `registry` | root → registry  | where stable IDs are recorded              |
+  | `config`   | root → config    | where workspace settings live              |
 
 - **The spanning tree.** Exactly one relation is the *spanning* relation —
   `contents`/`part_of` here. It is single-parent, and it is the workspace's
@@ -53,7 +60,7 @@ Three ideas carry everything else.
 
 The root is just a document that nothing contains — it has no `part_of`.
 colophon finds it by walking up from your current directory until it sees a
-`.md` file with metadata and no `part_of` (an `index.md` or `README.md` wins
+document with metadata and no `part_of` (an `index.md` or `README.md` wins
 ties).
 
 ---
@@ -62,15 +69,13 @@ ties).
 
 colophon builds from source and needs two toolchains:
 
-- **Rust** (`cargo`) — to build colophon itself.
-- **Zig** — colophon's metadata parser (`fig`) and body parser (`twig`) are
-  Zig-backed and compile during the build.
-
-`twig` is currently a path dependency, so clone it *next to* colophon:
+- **Rust** (`cargo`, 1.85 or newer) — to build colophon itself.
+- **Zig** (0.16.0) — colophon's metadata parser (`fig`) and body parser
+  (`twig-doc`) are Zig-backed and compile during the build. Both are ordinary
+  crates.io dependencies, so there is nothing to clone alongside colophon.
 
 ```console
-$ git clone https://github.com/adammharris/twig
-$ git clone <colophon-repo> colophon
+$ git clone https://github.com/adammharris/colophon
 $ cd colophon
 $ cargo build --release
 ```
@@ -84,75 +89,82 @@ it by full path. Every example below uses the command name `colophon`.
 
 `init` sets up a workspace: a self-describing root document plus a config
 document that records your preferences. On a terminal it walks you through a
-handful of choices:
+series of choices:
 
 ```console
 $ colophon init my-vault
 ┌  colophon init
 │
-◇  Title ·············· My Vault
-◇  Author ············· (blank)
-◇  Content format ····· Markdown
-◇  Embed type ········· Character delimiters
-◇  Config language ···· YAML
-◇  Link style ········· Markdown, workspace-absolute
-◇  Identity ··········· On demand — an ID on link-by-id or publish
-◇  Links between documents ··· By path
+◇  Title ················ My Vault
+◇  Author ··············· (blank)
+◇  Content format ······· Markdown
+◇  Embed type ··········· Character delimiters
+◇  Config language ······ YAML
+◇  Wrapper ·············· Markdown
+◇  Identity ············· On demand
+◇  References between documents ··· By path
+◇  Path format ·········· Workspace-absolute
+◇  Where IDs are stored ·· In each file (+ registry)
+◇  Content checksums ····· Attachments
 │
 └  initialized /home/you/my-vault
-   root: index.md — My Vault
-   config: colophon.yaml — content markdown, embed delimited (character delimiters), language yaml, identity lazy, references path, markdown notation, root paths, id storage both, recycle bin, fixity attachments
-   next: colophon new <path> --parent index.md
 ```
 
-Identity is **two independent choices** (see [§9](#9-stable-ids-optional)): when a
-document earns a stable ID, and whether colophon writes its structural links by
-ID or by path. The second prompt only appears when identity isn't off. The
-choices, in the order they're asked:
+Each prompt has a flag, so you can skip the interview entirely. Pass `--yes`
+(`-y`) to take every default:
 
-| Prompt                       | Default                                    | Options                                              |
-| ---------------------------- | ------------------------------------------- | ---------------------------------------------------- |
-| **Title**                    | the directory's name                       | any text                                             |
-| **Author**                   | omitted                                     | any text, or blank to leave it out                   |
-| **Content format**           | `markdown`                                  | `markdown` (`.md`), `djot` (`.dj`), `html` (`.html`) |
-| **Embed type**               | the first style the content format offers   | `delimited`, `code-block`, `html-script`, `html-code`, `separate` — narrowed by content format (e.g. only Markdown offers `delimited`) |
-| **Config language**          | `yaml`                                      | `yaml`, `json`, `toml`, `fig` — narrowed by embed type (`fig` has no `delimited` form) |
-| **Link style**               | `markdown-root`                             | see [§10](#10-workspace-config)                      |
-| **Identity**                 | `lazy` (on demand)                          | `off` (paths only), `lazy`, `eager` — see [§9](#9-stable-ids-optional) |
-| **Links between documents**  | `path`                                      | `path`, `id` (survive moves) — shown only when identity ≠ `off` |
+<!-- exec -->
+```console
+$ colophon init my-vault --yes
+initialized /home/you/my-vault
+  root: index.md — My Vault
+  config: colophon.yaml — content markdown, embed delimited (character delimiters), language yaml, identity lazy, references path, markdown notation, root paths, id storage both, recycle bin, fixity attachments
+next: colophon new <title> --in index.md
+```
 
-The root-shaping choices come first; the rest are **workspace
-preferences**. All of them are written into a config document (`colophon.yaml`,
-or `colophon.json` / `colophon.figl` if you chose that config language — linked
-from the root) so the workspace records how it wants to be authored — see
-[§10](#10-workspace-config). The **content format** also sets the root file's
-extension and body grammar; `twig` (colophon's body parser) handles all three.
-The **embed type** picks the carrier that config language is written in — frontmatter
-delimiters, a fenced code block, an HTML data island, or a separate sidecar
-document — and gates which config languages make sense (a fenced block can be
-any language; bare delimiters only suit YAML/TOML/JSON, not `fig`).
+The prompts, in the order they're asked:
 
-Every choice is also a flag, so you can skip the prompts. Pass `--yes` (`-y`) to
-take all defaults, or set some and be prompted for the rest:
+| Prompt                        | Flag           | Default                       | Options                                                       |
+| ----------------------------- | -------------- | ----------------------------- | ------------------------------------------------------------- |
+| **Title**                     | `--title`      | the directory's name          | any text                                                      |
+| **Author**                    | `--author`     | omitted                       | any text                                                      |
+| **Content format**            | `--content`    | `markdown`                    | `markdown` (`.md`), `djot` (`.dj`), `html` (`.html`)          |
+| **Embed type**                | `--embed`      | the content's first style     | `delimited`, `code-block`, `html-script`, `html-code`, `separate` — narrowed by content format |
+| **Config language**           | `--meta`       | `yaml`                        | `yaml`, `json`, `toml`, `fig` — narrowed by embed type        |
+| **Wrapper**                   | `--wrapper`    | `markdown`                    | `markdown` (`[Title](target)`), `wikilink` (`[[target]]`)     |
+| **Identity**                  | `--identity`   | `lazy`                        | `off` (a.k.a. `none`), `lazy`, `eager` — see [§9](#9-stable-ids-optional) |
+| **References between docs**   | `--reference`  | `path`                        | `path`, `id`, `alias`, `split` — `id`/`split` need identity   |
+| **Path format**               | `--link-style` | `markdown-root`               | `markdown-root`, `markdown-relative`, `plain-relative`, `plain-canonical` (only when references are by path) |
+| **Where IDs are stored**      | `--id-storage` | `frontmatter`                 | `registry`, `frontmatter` — only when identity is on          |
+| **Content checksums**         | `--fixity`     | `payloads`                    | `off`, `payloads` (attachments), `full` (also bodies)         |
+
+The root-shaping choices come first; the rest are **workspace preferences**, all
+written into a config document (`colophon.yaml`, linked from the root) so the
+workspace records how it wants to be authored — see [§10](#10-workspace-config).
+The **content format** sets the root file's extension and body grammar. The
+**embed type** picks the carrier the config language is written in — frontmatter
+delimiters, a fenced code block, an HTML data island, or a separate sidecar — and
+gates which config languages fit (bare delimiters don't suit `fig`).
+
+Setting some flags and being prompted for the rest works too. `--reference id`
+needs identity, so it's rejected with `--identity off`:
 
 ```console
-$ colophon init my-vault --content djot --identity lazy --links id --yes
+$ colophon init my-vault --content djot --reference id --yes
 initialized /home/you/my-vault
   root: index.dj — My Vault
   config: colophon.yaml — content djot, embed code_block (typed code block), language yaml, identity lazy, references id, id storage both, recycle bin, fixity attachments
-next: colophon new <path> --parent index.dj
+next: colophon new <title> --in index.dj
 ```
 
-Flags: `--title`, `--author`, `--content <markdown|djot|html>`, `--embed
-<delimited|code-block|html-script|html-code|separate>`, `--meta <yaml|json|toml|fig>`,
-`--link-style <markdown-root|markdown-relative|plain-relative|plain-canonical>`,
-`--identity <off|lazy|eager>`, `--links <path|id>`, `--yes`. (`--links id` needs
-identity, so it's rejected with `--identity off`.) With no arguments, `init` initializes
-the current directory. It refuses to run where a workspace root already exists,
-so it's safe to re-run by mistake.
+With no directory argument, `init` initializes the current directory. It refuses
+to run where a workspace root already exists, so re-running it by mistake is
+safe. Look at the root it wrote:
 
+<!-- exec -->
 ```console
-$ cd my-vault && cat index.md
+$ cd my-vault
+$ cat index.md
 ---
 title: My Vault
 config: colophon.yaml
@@ -165,40 +177,45 @@ config: colophon.yaml
 
 ## 4. Grow the tree with `new`
 
-`new` creates a document *and* wires up both directions of the spanning link —
-the parent gains a `contents` entry, the child gets a `part_of` back.
+`new` takes the new document's **title** as its positional argument and the
+parent to hang it under as `--in` (`-i`). It derives a readable filename from the
+title (a slug plus the content extension) and wires up *both* directions of the
+spanning link — the parent gains a `contents` entry, the child gets a `part_of`
+back.
 
+<!-- exec -->
 ```console
-$ colophon new topics/rust.md --parent index.md
-created topics/rust.md (in index.md)
-
-$ colophon new topics/zig.md --parent index.md
-created topics/zig.md (in index.md)
+$ colophon new "Rust" --in index.md
+created rust.md (in index.md)
+$ colophon new "Zig" --in index.md
+created zig.md (in index.md)
 ```
 
-`new` creates intermediate folders (`topics/`) as needed. Look at what it wrote:
+Override the derived filename with `--as <path>` (an exact path) or just its
+extension with `--ext`. Look at what `new` wrote:
 
+<!-- exec -->
 ```console
 $ cat index.md
 ---
 title: My Vault
+config: colophon.yaml
 contents:
-- '[rust](/topics/rust.md)'
-- '[zig](/topics/zig.md)'
+- '[Rust](/rust.md)'
+- '[Zig](/zig.md)'
 ---
 
 # My Vault
-
-$ cat topics/rust.md
+$ cat rust.md
 ---
-title: rust
+title: Rust
 part_of: '[My Vault](/index.md)'
 ---
 ```
 
 The links are ordinary Markdown links written into the metadata. Nothing about
-the structure lives in the filesystem — move `index.md` to another machine with
-these two files and it still describes the same tree.
+the structure lives in the filesystem — move these files to another machine and
+they still describe the same tree.
 
 ---
 
@@ -207,23 +224,27 @@ these two files and it still describes the same tree.
 `tree` prints the containment tree, discovered by following `contents` from the
 root:
 
+<!-- exec -->
 ```console
 $ colophon tree
 index.md — My Vault
-├── topics/rust.md — rust
-└── topics/zig.md — zig
+├── rust.md — Rust
+└── zig.md — Zig
 ```
 
 `show` summarizes one document — its title, spanning children, and overlay
 links:
 
+<!-- exec -->
 ```console
 $ colophon show index.md
 index.md
   title: My Vault
   contents (2 children):
-    - [rust](/topics/rust.md)
-    - [zig](/topics/zig.md)
+    - [Rust](/rust.md)
+    - [Zig](/zig.md)
+  config:
+    - colophon.yaml
 ```
 
 More single-document readers:
@@ -236,10 +257,11 @@ More single-document readers:
 | `colophon body FILE`       | everything *outside* the metadata block            |
 | `colophon backlinks FILE`  | who links *to* this document, across the workspace |
 
+<!-- exec -->
 ```console
 $ colophon backlinks index.md
-topics/rust.md	part_of	path
-topics/zig.md	part_of	path
+rust.md	part_of	path
+zig.md	part_of	path
 ```
 
 ---
@@ -250,12 +272,12 @@ topics/zig.md	part_of	path
 comments, and metadata format. `set` even creates the block if a document has
 none.
 
+<!-- exec -->
 ```console
-$ colophon set topics/rust.md summary "Notes on the Rust language"
-$ colophon get topics/rust.md summary
+$ colophon set rust.md summary "Notes on the Rust language"
+$ colophon get rust.md summary
 Notes on the Rust language
-
-$ colophon unset topics/rust.md summary
+$ colophon unset rust.md summary
 ```
 
 Values are typed by inference: `true`/`false`, integers, floats, and `null`
@@ -268,8 +290,10 @@ The *body* is everything after the frontmatter. colophon can render a
 Markdown/Djot body to HTML, and it understands code — a `[[…]]` inside a code
 span is treated as code, never as a link:
 
+<!-- exec -->
 ```console
-$ colophon render topics/rust.md
+$ printf '\n# Rust\n\nInline `let x = [[1,2],[3,4]];` is code, not a link.\n' >> rust.md
+$ colophon render rust.md
 <h1>Rust</h1>
 <p>Inline <code>let x = [[1,2],[3,4]];</code> is code, not a link.</p>
 ```
@@ -285,55 +309,69 @@ This is colophon's payoff. `mv` moves a file **and rewrites every link that
 pointed at it** — the parent's `contents` entry, the moved file's own relative
 links, overlay links, and body wikilinks across the whole workspace.
 
+<!-- exec -->
 ```console
-$ colophon mv topics/rust.md topics/rust-lang.md
-moved topics/rust.md -> topics/rust-lang.md
-
+$ colophon mv rust.md rust-lang.md
+moved rust.md -> rust-lang.md
 $ colophon tree
 index.md — My Vault
-├── topics/rust-lang.md — rust
-└── topics/zig.md — zig
+├── rust-lang.md — Rust
+└── zig.md — Zig
 ```
 
-`rm` deletes a document and removes its parent's `contents` entry. It refuses to
-orphan children unless you pass `--force`, and warns about any links left
-dangling:
+`rm` removes a document's parent entry and, by default, moves the file to the
+workspace **recycle bin** (recoverable with `colophon restore`). Pass `--purge`
+for an immediate hard delete. It refuses to orphan children unless you pass
+`--force`, and warns about any links left dangling:
 
+<!-- exec -->
 ```console
-$ colophon rm topics/zig.md
-deleted topics/zig.md
+$ colophon rm zig.md
+moved zig.md to the recycle bin (restore with `colophon restore`)
 ```
 
 ---
 
 ## 8. Check integrity
 
-`check` walks from the root and reports problems: broken links, case
-mismatches, duplicate containment, a child missing its `part_of` inverse, and
-dangling IDs. It exits non-zero when it finds anything, so it fits in CI.
+`check` walks from the root and reports problems: broken links, case mismatches,
+duplicate containment, a child missing its `part_of` inverse, dangling IDs, and
+documents on disk that nothing links to (orphans). It exits non-zero when it
+finds anything, so it fits in CI. Right now the workspace is consistent:
 
+<!-- exec -->
 ```console
 $ colophon check
-index.md: child topics/rust.md does not declare part_of back to it
-1 finding(s)
+ok: no findings
 ```
 
-`--fix` walks the *fixable* findings interactively and applies safe,
-metadata-only repairs (today: the missing inverse). It never edits body prose —
-so code that merely looks like a link is never "repaired."
+Break the inverse on purpose to see a finding — and `--fix`, which walks the
+*fixable* findings interactively and applies safe, metadata-only repairs (today:
+the missing inverse, and adopting an orphan). It never edits body prose, so code
+that merely looks like a link is never "repaired":
 
+<!-- exec allow-fail -->
 ```console
-$ colophon check --fix
-⚑  index.md: child topics/rust.md does not declare part_of back to it
-   → declare part_of → index.md in topics/rust.md
-   apply? [y]es / [n]o / [a]ll / [q]uit: y
-applied 1 fix(es); 0 finding(s) need attention
+$ colophon unset rust-lang.md part_of
+$ colophon check
+index.md: child rust-lang.md does not declare part_of back to it
+1 finding(s)
+$ printf 'y\n' | colophon check --fix
+⚑  index.md: child rust-lang.md does not declare part_of back to it
+   → declare part_of → index.md in rust-lang.md
+   apply? [y]es / [n]o / [a]ll / [q]uit: applied 1 fix(es); 0 finding(s) need attention
+```
+
+<!-- exec -->
+```console
+$ colophon check
+ok: no findings
 ```
 
 Broken *body* wikilinks are reported but not auto-fixed. Note that a body
 wikilink like `[[index.md]]` resolves **relative to the file it's in** — from
-`topics/rust.md` that means `topics/index.md`. Write `[[/index.md]]` (from the
-root) or `[[../index.md]]` (relative) to point at the real root.
+`sub/rust.md` that means `sub/index.md`. Write `[[/index.md]]` (from the root) or
+`[[../index.md]]` (relative) to point at the real root.
 
 ---
 
@@ -345,38 +383,45 @@ owns your links" trick, except the identity data is a plain file in your own tre
 
 Two independent settings control this (§10):
 
-- **`identity`** — *when* a document earns a stable ID: `none` (never), `lazy`
-  (on a link-by-id or publish — the recommended default), or `eager` (every
-  document at creation).
+- **`identity`** — *when* a document earns a stable ID: `none`/`off` (never),
+  `lazy` (on a link-by-id or publish — the recommended default), or `eager`
+  (every document at creation).
 - **`references.target`** — *what a reference addresses*: `path`, `id`, or
   `alias`. Set it to `id` and colophon authors structural links *by ID*, so a
   move rewrites no links at all (the registry tracks the new path). Only
-  meaningful when `identity` isn't `none`. The `init` **Links between documents**
-  prompt sets this.
+  meaningful when `identity` isn't off. The `init` **References between
+  documents** prompt sets this.
 
-Even with `references.target: path`, `lazy` identity means you can mint an ID on demand and
-paste a durable reference by hand. Turn identity on at `init` (`--identity lazy`,
-optionally `--links id`), or later with `colophon config identity lazy`:
+Even with `references.target: path`, `lazy` identity (the default) means you can
+mint an ID on demand and paste a durable reference by hand:
 
+<!-- exec -->
 ```console
 $ colophon config identity lazy
 set identity = lazy in colophon.yaml
-
-$ colophon id topics/rust-lang.md
+$ colophon id rust-lang.md
 initialized registry.yaml (linked from index.md)
-colophon:ydbqj4g
+id:s5jpwxz
+```
 
-$ colophon mv topics/rust-lang.md notes/rust.md
-$ colophon resolve colophon:ydbqj4g
-notes/rust.md          # the ID still points at the file after the move
+The ID survives a move — the registry follows the file:
+
+<!-- exec -->
+```console
+$ id=$(colophon id rust-lang.md)
+$ colophon mv rust-lang.md notes/rust.md
+moved rust-lang.md -> notes/rust.md
+$ colophon resolve "$id"
+notes/rust.md
 ```
 
 The first `id` bootstraps a `registry` document (`registry.yaml`, or
 `.json`/`.figl` matching your metadata format) beside the root and links it from
 the root's metadata via the `registry` relation — so the identity state is
 *reachable*, discovered by following links like everything else, not hidden in a
-dotfolder. Deleting a document *tombstones* its ID (it stops resolving but is
-never reissued), so a stale `colophon:` reference stays diagnosable.
+dotfolder. IDs are written `id:<id>`; deleting a document *tombstones* its ID (it
+stops resolving but is never reissued), so a stale `id:` reference stays
+diagnosable.
 
 With `identity: off`, `colophon id` politely refuses — there is nothing to mint.
 
@@ -392,8 +437,9 @@ reads and writes it. Keys are grouped into a small nested vocabulary
 `colophon:` frontmatter block. `colophon check` flags any key colophon would
 silently ignore (a typo, or an unrecognized value).
 
+<!-- exec -->
 ```console
-$ colophon config                        # print the effective settings
+$ colophon config
 spec: 1
 content_format: markdown
 metadata:
@@ -409,8 +455,7 @@ updated: ''
 identity: lazy
 fixity: attachments
 recycle_bin: true
-
-$ colophon config references.target id   # change one nested setting (dotted key)
+$ colophon config references.target id
 set references.target = id in colophon.yaml
 ```
 
@@ -422,7 +467,7 @@ The knobs (dotted keys address nested axes):
 | `references.path_style`   | `root`, `relative`, `canonical`                                | how a *path* target is resolved                  |
 | `references.target`       | `path`, `id`, `alias`                                           | what a reference addresses                        |
 | `references.label`        | `true`/`false`                                                 | whether an id/alias link carries a `\|Title`      |
-| `identity`                | `none`, `lazy`, `eager`                                         | when a document earns a stable ID                |
+| `identity`                | `none` (or `off`), `lazy`, `eager`                             | when a document earns a stable ID                |
 | `id_storage`              | `registry`, `frontmatter`, `both`                              | where a stable ID lives                          |
 | `metadata.format`         | `yaml`, `json`, `toml`, `fig`                                  | config language for newly created documents      |
 | `metadata.embed`          | `delimited`, `code_block`, `html_script`, `html_code`, `separate` | how that config language is embedded          |
@@ -432,9 +477,9 @@ The knobs (dotted keys address nested axes):
 | `updated`                 | *a field name*                                                 | the machine-maintained "last updated" field      |
 
 The two `init` identity prompts map onto these keys: **Identity** sets
-`identity`, and **Links between documents** sets `references.target` (`path`, or
-`id` for move-stable links). With `identity: lazy` + `references.target: id`,
-structural links are by ID and a move rewrites nothing — the registry does the work.
+`identity`, and **References between documents** sets `references.target`. With
+`identity: lazy` + `references.target: id`, structural links are by ID and a move
+rewrites nothing — the registry does the work.
 
 **Making config explicit.** Every key has a default, so a workspace with a
 minimal (or no) config document still runs — it just relies on those defaults. If
@@ -442,6 +487,7 @@ you would rather see and edit every setting, `colophon config --setup` writes th
 full effective config into `colophon.yaml` (creating and linking it if needed),
 filling in the keys you have not set while preserving the ones you have:
 
+<!-- exec -->
 ```console
 $ colophon config --setup
 wrote 9 explicit setting(s) to colophon.yaml
@@ -460,16 +506,23 @@ these reminders.
 
 | Command                         | What it does                                             |
 | ------------------------------- | -------------------------------------------------------- |
-| `init [DIR] [flags]`            | create a workspace root (interactive; `--title/--author/--meta/--content/--yes`) |
-| `new PATH --parent P`           | create a child document, linking both directions         |
-| `mv FROM TO`                    | move/rename, maintaining every affected link             |
-| `rm PATH [--force]`             | delete, removing the parent's entry                      |
+| `init [DIR] [flags]`            | create a workspace root (interactive; every prompt has a flag) |
+| `new TITLE --in P`              | create a child document, linking both directions         |
+| `mv FROM TO [--in P]`           | move/rename, maintaining every affected link             |
+| `reparent PATH --in P`          | change a document's parent, leaving the file put         |
+| `rm PATH [--force] [--purge]`   | delete (to recycle bin by default), removing the parent's entry |
+| `restore PATH` / `empty-bin`    | recover a binned document / purge the bin                |
+| `attach FILE [--in P]`          | give a non-document file a metadata sidecar, linked in    |
 | `tree [ROOT]`                   | print the containment tree                               |
+| `explore [FILE]`                | walk the graph interactively                             |
 | `check [ROOT] [--fix]`          | report (and optionally repair) integrity problems        |
 | `show FILE`                     | summarize a document                                     |
 | `meta / get / links / body`     | read metadata or body                                    |
 | `set FILE KEY VALUE` / `unset`  | edit a metadata field, format-preserving                 |
+| `edit FILE`                     | open in `$EDITOR`, restamping fixity/`updated` on save    |
 | `render FILE`                   | render the body to HTML                                  |
+| `duplicate FILE`                | copy a document as a fresh sibling                       |
+| `convert FILE AXIS VALUE`       | re-spell a document's links (`notation` / `path_style`)  |
 | `id FILE` / `resolve ID`        | mint / look up a stable ID                               |
 | `backlinks FILE`                | list inbound links                                       |
 | `config [KEY [VALUE]]`          | read/write workspace settings                            |
@@ -480,17 +533,13 @@ Run `colophon <command> --help` for the full options of any command.
 
 ## Known limitations
 
-colophon is young ("works for simple workspaces"). Things a beginner will hit:
+colophon is young. Things a beginner will hit:
 
-- **No directory scanning yet.** colophon only sees documents *reachable from
-  the root* by following `contents`. A `.md` file you never link into the tree
-  is invisible to `tree` and `check`. Always attach new documents with `new`
-  (or a hand-written `part_of`).
 - **`mv` doesn't yet honor the reference style.** A move currently rewrites the
   parent's link as a *relative* path even when your `references.path_style` is
   `root`. The link still resolves; only its style changes. (`new` and
   `check --fix` do respect the style.)
-- **The root must be unambiguous.** If a directory has two `.md` files with
+- **The root must be unambiguous.** If a directory has two documents with
   metadata and no `part_of`, colophon can't tell which is the root and reports
   an ambiguity. Keep a single root per workspace (name it `index.md`).
 - **One vocabulary for now.** The CLI uses the built-in diaryx relation set

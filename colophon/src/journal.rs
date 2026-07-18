@@ -70,7 +70,9 @@ const MAGIC: &[u8; 8] = b"COLOJRN1";
 /// alone and fail only the document writes it means to.
 #[cfg(test)]
 pub(crate) fn is_journal_path(path: &Path) -> bool {
-    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.contains("colophon-journal"))
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.contains("colophon-journal"))
 }
 
 /// Serialize a change set's ops into journal bytes: `MAGIC`, the op count, each
@@ -117,14 +119,25 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<FileOp>> {
         return Err(corrupt("checksum mismatch"));
     }
 
-    let mut cur = Cursor { bytes: &bytes[..body_end], at: MAGIC.len() };
+    let mut cur = Cursor {
+        bytes: &bytes[..body_end],
+        at: MAGIC.len(),
+    };
     let count = cur.take_u64()?;
     let mut ops = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let op = match cur.take_u8()? {
-            0 => FileOp::Write { path: cur.take_path()?, bytes: cur.take_bytes()?.to_vec() },
-            1 => FileOp::Rename { from: cur.take_path()?, to: cur.take_path()? },
-            2 => FileOp::Remove { path: cur.take_path()? },
+            0 => FileOp::Write {
+                path: cur.take_path()?,
+                bytes: cur.take_bytes()?.to_vec(),
+            },
+            1 => FileOp::Rename {
+                from: cur.take_path()?,
+                to: cur.take_path()?,
+            },
+            2 => FileOp::Remove {
+                path: cur.take_path()?,
+            },
             other => return Err(corrupt(&format!("unknown op tag {other}"))),
         };
         ops.push(op);
@@ -232,7 +245,10 @@ fn put_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
 /// so refusing one here is a real invariant, not a lost capability.
 fn put_path(buf: &mut Vec<u8>, path: &Path) -> Result<()> {
     let s = path.to_str().ok_or_else(|| {
-        Error::Structure(format!("journal cannot encode non-UTF-8 path: {}", path.display()))
+        Error::Structure(format!(
+            "journal cannot encode non-UTF-8 path: {}",
+            path.display()
+        ))
     })?;
     put_bytes(buf, s.as_bytes());
     Ok(())
@@ -313,9 +329,17 @@ mod tests {
     #[test]
     fn a_change_set_round_trips_through_the_journal() {
         let ops = vec![
-            FileOp::Write { path: "child.md".into(), bytes: b"hello".to_vec() },
-            FileOp::Rename { from: "a.md".into(), to: "sub/a.md".into() },
-            FileOp::Remove { path: "gone.md".into() },
+            FileOp::Write {
+                path: "child.md".into(),
+                bytes: b"hello".to_vec(),
+            },
+            FileOp::Rename {
+                from: "a.md".into(),
+                to: "sub/a.md".into(),
+            },
+            FileOp::Remove {
+                path: "gone.md".into(),
+            },
         ];
         let bytes = encode(&ops).unwrap();
         assert_eq!(decode(&bytes).unwrap(), ops);
@@ -326,7 +350,10 @@ mod tests {
         // An attached photo staged for a write is opaque bytes, not text — the
         // journal must carry it exactly, with no escaping or UTF-8 assumption.
         let payload: Vec<u8> = (0u8..=255).cycle().take(1000).collect();
-        let ops = vec![FileOp::Write { path: "photo.png".into(), bytes: payload.clone() }];
+        let ops = vec![FileOp::Write {
+            path: "photo.png".into(),
+            bytes: payload.clone(),
+        }];
         let decoded = decode(&encode(&ops).unwrap()).unwrap();
         assert_eq!(decoded, ops);
     }
@@ -335,7 +362,10 @@ mod tests {
     fn a_tampered_journal_is_refused_not_replayed() {
         // The checksum's whole job: a journal whose bytes changed under it must be
         // rejected loudly, never silently replayed into a corrupt workspace.
-        let ops = vec![FileOp::Write { path: "child.md".into(), bytes: b"hello".to_vec() }];
+        let ops = vec![FileOp::Write {
+            path: "child.md".into(),
+            bytes: b"hello".to_vec(),
+        }];
         let mut bytes = encode(&ops).unwrap();
         let mid = bytes.len() / 2;
         bytes[mid] ^= 0xff;
@@ -361,8 +391,14 @@ mod tests {
         let root = tmp("recover-none-applied");
         std::fs::write(root.join("parent.md"), "old parent").unwrap();
         let ops = vec![
-            FileOp::Write { path: "child.md".into(), bytes: b"child".to_vec() },
-            FileOp::Write { path: "parent.md".into(), bytes: b"new parent".to_vec() },
+            FileOp::Write {
+                path: "child.md".into(),
+                bytes: b"child".to_vec(),
+            },
+            FileOp::Write {
+                path: "parent.md".into(),
+                bytes: b"new parent".to_vec(),
+            },
         ];
         std::fs::write(root.join(JOURNAL_NAME), encode(&ops).unwrap()).unwrap();
 
@@ -371,7 +407,10 @@ mod tests {
         assert_eq!(outcome, Recovered::Applied(2));
         assert_eq!(read(&root, "child.md").as_deref(), Some("child"));
         assert_eq!(read(&root, "parent.md").as_deref(), Some("new parent"));
-        assert!(!root.join(JOURNAL_NAME).exists(), "journal must be cleared after recovery");
+        assert!(
+            !root.join(JOURNAL_NAME).exists(),
+            "journal must be cleared after recovery"
+        );
     }
 
     #[test]
@@ -380,8 +419,14 @@ mod tests {
         let root = tmp("recover-partial");
         std::fs::write(root.join("parent.md"), "old parent").unwrap();
         let ops = vec![
-            FileOp::Write { path: "child.md".into(), bytes: b"child".to_vec() },
-            FileOp::Write { path: "parent.md".into(), bytes: b"new parent".to_vec() },
+            FileOp::Write {
+                path: "child.md".into(),
+                bytes: b"child".to_vec(),
+            },
+            FileOp::Write {
+                path: "parent.md".into(),
+                bytes: b"new parent".to_vec(),
+            },
         ];
         std::fs::write(root.join(JOURNAL_NAME), encode(&ops).unwrap()).unwrap();
         // Simulate the first op having landed before the crash.
@@ -401,7 +446,10 @@ mod tests {
         // destination present).
         for already_moved in [false, true] {
             let root = tmp(&format!("recover-rename-{already_moved}"));
-            let ops = vec![FileOp::Rename { from: "a.md".into(), to: "sub/a.md".into() }];
+            let ops = vec![FileOp::Rename {
+                from: "a.md".into(),
+                to: "sub/a.md".into(),
+            }];
             std::fs::write(root.join(JOURNAL_NAME), encode(&ops).unwrap()).unwrap();
             if already_moved {
                 std::fs::create_dir_all(root.join("sub")).unwrap();
@@ -422,7 +470,10 @@ mod tests {
     fn recovery_is_a_noop_when_there_is_no_journal() {
         let root = tmp("recover-noop");
         std::fs::write(root.join("doc.md"), "untouched").unwrap();
-        assert_eq!(block_on(recover(&StdFs, &root)).unwrap(), Recovered::Nothing);
+        assert_eq!(
+            block_on(recover(&StdFs, &root)).unwrap(),
+            Recovered::Nothing
+        );
         assert_eq!(read(&root, "doc.md").as_deref(), Some("untouched"));
     }
 
@@ -432,7 +483,10 @@ mod tests {
         // recovered (or re-created) journal reaches the same state, never an error.
         let root = tmp("recover-twice");
         std::fs::write(root.join("parent.md"), "old").unwrap();
-        let ops = vec![FileOp::Write { path: "parent.md".into(), bytes: b"new".to_vec() }];
+        let ops = vec![FileOp::Write {
+            path: "parent.md".into(),
+            bytes: b"new".to_vec(),
+        }];
         let journal = encode(&ops).unwrap();
 
         std::fs::write(root.join(JOURNAL_NAME), &journal).unwrap();
