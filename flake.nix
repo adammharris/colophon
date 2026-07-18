@@ -1,10 +1,10 @@
 {
-  description = "colophon — a self-describing workspace metadata CLI and library";
+  description = "prov — a self-describing workspace metadata CLI and library";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # colophon's `fig` and `twig-doc` dependencies are Zig-backed (their build.rs
+    # prov's `fig` and `twig-doc` dependencies are Zig-backed (their build.rs
     # scripts run `zig build`), so the Rust build needs the pinned Zig toolchain
     # (0.16.0) on PATH, matching those crates' CI.
     zig-overlay.url = "github:mitchellh/zig-overlay";
@@ -18,19 +18,19 @@
         zig = zig-overlay.packages.${system}."0.16.0";
 
         # The workspace version (single source of truth in [workspace.package]).
-        # Parse it so the flake reports the same number as `colophon --version`.
+        # Parse it so the flake reports the same number as `prov --version`.
         version =
           let m = builtins.match ".*\n[[:blank:]]*version = \"([^\"]+)\".*"
                     (builtins.readFile ./Cargo.toml);
           in if m == null
-             then throw "colophon flake: could not find workspace version in Cargo.toml"
+             then throw "prov flake: could not find workspace version in Cargo.toml"
              else builtins.head m;
       in {
         packages = rec {
-          default = colophon;
+          default = prov;
 
-          colophon = pkgs.rustPlatform.buildRustPackage {
-            pname = "colophon";
+          prov = pkgs.rustPlatform.buildRustPackage {
+            pname = "prov";
             inherit version;
             src = ./.;
 
@@ -62,14 +62,14 @@
             '';
 
             # Build/test only the CLI crate; the library is a workspace member.
-            cargoBuildFlags = [ "-p" "colophon-cli" ];
-            cargoTestFlags = [ "-p" "colophon-cli" ];
+            cargoBuildFlags = [ "-p" "prov-cli" ];
+            cargoTestFlags = [ "-p" "prov-cli" ];
 
             meta = {
-              description = "Command-line companion for the colophon self-describing workspace library";
-              homepage = "https://github.com/adammharris/colophon";
+              description = "Command-line companion for the prov self-describing workspace library";
+              homepage = "https://github.com/adammharris/prov";
               license = with pkgs.lib.licenses; [ mit asl20 ];
-              mainProgram = "colophon";
+              mainProgram = "prov";
               platforms = pkgs.lib.platforms.unix;
             };
           };
@@ -77,7 +77,7 @@
 
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.colophon}/bin/colophon";
+          program = "${self.packages.${system}.prov}/bin/prov";
         };
 
         devShells.default = pkgs.mkShell {

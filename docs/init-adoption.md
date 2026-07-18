@@ -1,9 +1,9 @@
 ```fig
-part_of = [colophon](/README.md)
+part_of = [prov](/README.md)
 ```
 # `init` over existing content — detection & adoption
 
-> Working design. What `colophon init` should do when the target directory
+> Working design. What `prov init` should do when the target directory
 > already holds markdown (with or without frontmatter), an existing tree, or just
 > unrelated files. Complements DESIGN §9 (extraction) and answers open question
 > #2 (how first-class is the filesystem `StructureSource`).
@@ -14,7 +14,7 @@ part_of = [colophon](/README.md)
 
 1. It bails *only* if `index.{md,dj,html,yaml,…}` exists.
 2. Otherwise it runs the interview and writes exactly two files — the root
-   `index.<content-ext>` and `colophon.<meta-ext>` — and ignores everything else
+   `index.<content-ext>` and `prov.<meta-ext>` — and ignores everything else
    in the directory.
 
 Two concrete failures follow in a non-empty folder:
@@ -24,7 +24,7 @@ Two concrete failures follow in a non-empty folder:
   *from the root*) never mentions them. The structure silently omits most of the
   folder — the exact opposite of "hand it to any tool and it unfolds."
 - **Config clobber.** The config write is unconditional and only `index.*` is
-  guarded, so a pre-existing `colophon.yaml` / `registry.yaml` is overwritten
+  guarded, so a pre-existing `prov.yaml` / `registry.yaml` is overwritten
   with no check.
 
 There is also a latent `find_root` interaction: existing files with frontmatter
@@ -57,12 +57,12 @@ directory, computed before the interview:
 |---|---|---|
 | **A. Greenfield** | empty, or only non-content files | Current behavior: write root + config, ignore the rest. |
 | **B. Loose content** | content files, **none** carrying `part_of`/`contents` | Choose/mint a root, then offer **adoption** of the loose files (interactive; `--adopt` non-interactively). |
-| **C. Already structured** | ≥1 file with `part_of`/`contents` (a diaryx/colophon-shaped tree) | **Do not mint a competing `index.md`.** Detect the existing root; attach **policy only** (write `colophon.<ext>` linked from it). Offer to adopt any still-loose files. |
+| **C. Already structured** | ≥1 file with `part_of`/`contents` (a diaryx/prov-shaped tree) | **Do not mint a competing `index.md`.** Detect the existing root; attach **policy only** (write `prov.<ext>` linked from it). Offer to adopt any still-loose files. |
 | **D. Initialized** | a config document already present | Refuse; point to `config` / `check`. `--force` re-runs the interview. |
 
 Cross-cutting rules (fix the footguns for every class):
 
-- **Never overwrite** an existing `colophon.<ext>` / `registry.<ext>` /
+- **Never overwrite** an existing `prov.<ext>` / `registry.<ext>` /
   `index.<ext>` without `--force`.
 - **Prefer an existing root** — an `index`/`readme` with frontmatter, or a lone
   no-`part_of` document — over minting `index.md`. When several no-`part_of`
@@ -163,7 +163,7 @@ This is independently valuable and it powers the rest:
 
 - makes "you have N unadopted files" a **checkable** signal, not a one-time
   `init` message;
-- gives an incremental `colophon adopt` (adopt files that appeared later) its
+- gives an incremental `prov adopt` (adopt files that appeared later) its
   work-list;
 - is the honest "what's missing" answer DESIGN §8 wants from the sleeper feature.
 
@@ -186,9 +186,9 @@ shares the Phase-1 machinery.
   classifies the directory (`classify_dir` → `DirState`) and branches:
   greenfield initializes as before; an initialized workspace or an existing
   structured tree is refused with guidance (the tree case names its root and
-  points at `colophon config`); loose content is confirmed interactively, noted
+  points at `prov config`); loose content is confirmed interactively, noted
   non-interactively, and refused under `--yes` (so a script never orphans
-  silently). The old narrow `index.*` guard is subsumed, and a `colophon.*`
+  silently). The old narrow `index.*` guard is subsumed, and a `prov.*`
   config is no longer clobbered. `validate` gained `Finding::Orphan` — a content
   document on disk that nothing reachable from the checked root links to —
   computed by diffing `Workspace::content_documents` against the walk's reachable
@@ -202,7 +202,7 @@ shares the Phase-1 machinery.
   workspace authors id links. `init` gained `--adopt flat|none` (and `mirror`,
   which errors as not-yet-built): `flat` links every loose document under the new
   root; the interactive path offers adopt / leave-unlinked / cancel. `Orphan`
-  autofix rides the same primitive — `colophon check --fix` offers to adopt each
+  autofix rides the same primitive — `prov check --fix` offers to adopt each
   orphan under the root. A path-only fix no longer bootstraps a spurious empty
   registry (the post-fix `ensure_registry` is now gated on the index being dirty).
   Still deferred: a dry-run/preview before writing, and per-file parent choice

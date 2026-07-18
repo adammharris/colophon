@@ -1,5 +1,5 @@
 ```fig
-part_of = [colophon](/README.md)
+part_of = [prov](/README.md)
 ```
 # Next steps — working notes
 
@@ -9,7 +9,7 @@ them. Not curated design (that's `DESIGN.md`); this is a scratch backlog.
 ## Identity & backlinks
 
 - **Step 4 — gated malformed-id autofix.** The one document-repairing heal: when
-  the census finds a malformed `colophon:<id>` near an edge the registry resolves
+  the census finds a malformed `prov:<id>` near an edge the registry resolves
   uniquely, offer to restore it. Directional invariant: forward links are ground
   truth; the index heals *toward* them; it rewrites a document *only* for a
   dangling id it can resolve from its own record. Everything else: report.
@@ -26,7 +26,7 @@ them. Not curated design (that's `DESIGN.md`); this is a scratch backlog.
   recoverable, and self-healing goes total — no central authoritative residue.
   The thesis-aligned alternative to Route C.
 
-- **Authoring `[[colophon:id]]` wikilinks.** The write side of the original
+- **Authoring `[[prov:id]]` wikilinks.** The write side of the original
   idea #2: mint via `Trigger::Link`, drop the target into body prose. Closes the
   loop — the whole census/rename/backlink stack was built to support this.
 
@@ -38,7 +38,7 @@ Principle established: **autofix edits metadata only, never body prose** — a
 findings are diagnosis-only; frontmatter findings are fixable.
 
 - ✅ **Missing inverse** — `suggest_fix` / `apply_fix` + interactive
-  `colophon check --fix`. Adds the back-link, style-matched (absolute vs
+  `prov check --fix`. Adds the back-link, style-matched (absolute vs
   relative) to how the parent referenced the child; declines when the child
   already claims a different parent (contested).
 - **Contested containment** (`… already contained elsewhere`, or a MissingInverse
@@ -54,7 +54,7 @@ findings are diagnosis-only; frontmatter findings are fixable.
 
 ## Body parsing (`twig`)
 
-The library colophon was waiting on to parse file bodies now exists:
+The library prov was waiting on to parse file bodies now exists:
 [`twig`](https://github.com/adammharris/twig), a sister Zig-backed project
 (document formats, the way `fig` is for config formats). Wired in as a path
 dependency for now (`../twig/bindings/rust/twig` from the workspace root) —
@@ -69,9 +69,9 @@ switch to a published version once `twig`'s Rust bindings have proven out.
   `verbatim`/`code_block`/`raw_inline`/`raw_block` AST node —
   `twig/src/c_abi.zig`, header at `twig/bindings/c/include/twig.h`), and its
   Rust bindings a matching `Document::code_spans() -> Vec<Range<usize>>`
-  (`twig/bindings/rust/twig/src/lib.rs`). colophon's `content::render_html`/
-  `code_spans` are direct calls into that — no subprocess. `colophon render
-  <file>` (colophon-cli, same feature) exercises rendering end-to-end.
+  (`twig/bindings/rust/twig/src/lib.rs`). prov's `content::render_html`/
+  `code_spans` are direct calls into that — no subprocess. `prov render
+  <file>` (prov-cli, same feature) exercises rendering end-to-end.
 - ✅ **Wired into `census`/`check`/rename — and it had to be more than a
   post-filter.** `link::scan_wikilinks(path, body)` is the one entry point
   `validate.rs`'s `walk` and `mutate.rs`'s two rename-time body-rewrite
@@ -93,7 +93,7 @@ switch to a published version once `twig`'s Rust bindings have proven out.
   knob was added — it's automatic whenever `content` is compiled in and the
   extension is recognized, degrading silently to the old unfiltered scan
   otherwise (feature off, unrecognized extension, or a twig failure). Still
-  not done: needs a `colophon-cli` rebuilt with `--features content` to
+  not done: needs a `prov-cli` rebuilt with `--features content` to
   actually take effect — not a default feature yet, since it pulls in the
   path-dependent `twig` (no released version to depend on by default).
   Whether it should become default once `twig` is published is open.
@@ -116,8 +116,8 @@ switch to a published version once `twig`'s Rust bindings have proven out.
 
 Established: **workspace config is a reachable, self-describing document linked
 from the root via a well-known `config` relation** — the registry's §6
-reachability move, applied to policy. Lazily materialized (`colophon config <k>
-<v>` creates + links `colophon.yaml` on first write); absent config = all
+reachability move, applied to policy. Lazily materialized (`prov config <k>
+<v>` creates + links `prov.yaml` on first write); absent config = all
 defaults. `link_format` precedence: config doc > root frontmatter (diaryx compat)
 > default.
 
@@ -127,25 +127,25 @@ defaults. `link_format` precedence: config doc > root frontmatter (diaryx compat
   `id_links`, `embed_format`, with `paths_only()`/`stable_ids()` presets and
   `apply`/`from_meta`/`to_mapping` round-trip. The CLI builds the whole
   workspace from it, so **Diaryx and Obsidian are each just a config** —
-  verified: `colophon id` refuses under Diaryx / mints under Obsidian;
-  `colophon new` authors id links under Obsidian and a move leaves them
-  untouched (registry does the maintenance). `colophon config` prints all knobs.
+  verified: `prov id` refuses under Diaryx / mints under Obsidian;
+  `prov new` authors id links under Obsidian and a move leaves them
+  untouched (registry does the maintenance). `prov config` prints all knobs.
 - ✅ **id-link authoring** (`Workspace::authored_target`): `create` and autofix
-  author `colophon:<id>` (registering the target) when `id_links` is on and
+  author `prov:<id>` (registering the target) when `id_links` is on and
   identity registers on a link, else a path in the link style. `create` mints
   IDs → `cmd_new` bootstraps the registry first when it will mint.
 - ✅ **`default_embed_format`** wired into `create` (new-doc archetype default).
 - ✅ **`content_format`** — the body-prose grammar, a full `WorkspaceConfig` field
   (`markdown`/`djot`/`html`), persisted by `init` (from `--content`) and read back
   like every other knob. `ContentFormat::extension()` gives the canonical file
-  extension, so **title-primary `colophon new "A Title"`** derives a readable
+  extension, so **title-primary `prov new "A Title"`** derives a readable
   filename (`link::slug(title).<content-ext>`) beside the parent while recording
   the real title in metadata; `--as <path>` / `--ext <e>` override the derived
   name (DESIGN §1 legibility — a slug, never an opaque `note-3.md`). The
   title-primary library seam is `Workspace::create_with_title`.
 - **More config knobs.** `vocabulary` (a named `RelationSet` preset, later a full
   spec).
-- **`colophon config preset diaryx|obsidian`** — write a whole preset via
+- **`prov config preset diaryx|obsidian`** — write a whole preset via
   `WorkspaceConfig::to_mapping` (the round-trip is already there).
 - **Route `rename`'s path rewrites through the link style too.** `create` and
   autofix now author via the style/id seam; rename's inbound path rewrites still
@@ -199,14 +199,14 @@ format-agnosticism, made an action). Decided this session:
 
 ## Routes (`route.rs`)
 
-Landed: `colophon new --in-title Daily/2026/2026-07 -p`. The position taken, so it
-doesn't get relitigated: **the workflow is not colophon's to own.** A `daily`
+Landed: `prov new --in-title Daily/2026/2026-07 -p`. The position taken, so it
+doesn't get relitigated: **the workflow is not prov's to own.** A `daily`
 command would bake diaryx vocabulary into the core (§2/§9), and a workflow DSL in
-`colophon.yaml` would be worse — it would restate, in config, a fact the links
+`prov.yaml` would be worse — it would restate, in config, a fact the links
 *already declare* (where daily entries live), which is the authoritative-vs-derived
 confusion §5 warns about, while the genuinely non-derivable half (a date format)
 is a fact about the *user*, not the workspace, and so can't live in a document
-that's versioned and shared with the content. The split: colophon supplies the
+that's versioned and shared with the content. The split: prov supplies the
 primitive a shell can't express (find-or-create nodes, linked both ways, registry
 maintained); a two-line alias supplies the dates.
 
@@ -244,7 +244,7 @@ maintained); a two-line alias supplies the dates.
   `adopt` is a library call and an `init` flag, **never a subcommand**, so naming it
   would prescribe a cure the CLI cannot dispense. The message now states the problem
   and offers only the remedy that exists (route to the title). Re-add the adopt
-  clause if and when `colophon adopt` is real — see below.
+  clause if and when `prov adopt` is real — see below.
 - **`assert_vacant` refuses; it deliberately does not reuse.** A route segment that
   lands on a directory already holding a node stops with that node's title. The
   tempting next step — resolve the segment *to* that node — is the one thing this
@@ -254,7 +254,7 @@ maintained); a two-line alias supplies the dates.
   real title once, and the error prints it.
 - **The refusal is not "one index per directory."** That's diaryx's rule, and
   re-importing it as a lint would be directory-thinking: containment is link-shaped,
-  so a directory may hold as many nodes as it likes and colophon has no opinion.
+  so a directory may hold as many nodes as it likes and prov has no opinion.
   `assert_vacant` fires only where synthesis is *forced to pick a filename by
   slugging a title*, which is the one place the directory genuinely constrains the
   graph. Nowhere else should grow a version of this check.
@@ -279,11 +279,11 @@ retargets inbound links and the reparent must then find the parent at the docume
 `Workspace::reparent` is the verb `adopt` deliberately refuses to be: adopt is
 additive and declines a child that already claims a different parent ("a contested
 containment a human must resolve"); reparent *replaces* the claim. An unparented
-child is accepted, which makes reparent a superset — so `colophon adopt` was never
+child is accepted, which makes reparent a superset — so `prov adopt` was never
 added, since `reparent --in` already links an orphan.
 
 - **It is atomic against errors, detectable against crashes.** Three documents
-  change, and they land as one `ChangeSet` (`colophon/src/change.rs`), so an I/O
+  change, and they land as one `ChangeSet` (`prov/src/change.rs`), so an I/O
   failure at any of them unwinds the rest: no error leaves the child contained
   twice. A crash is still a crash — unwinding is driven from memory — so the write
   *order* still earns its keep, chosen so every window a crash could expose is a
@@ -325,7 +325,7 @@ document argument now declares its addressing mode in the **value**:
 | --- | --- | --- |
 | `daily.md` | path | no |
 | `@Daily/2026/08` | route of titles from the root (bare `@` = the root) | yes |
-| `id:fpk38j` (or legacy `colophon:`) | registry handle | yes |
+| `id:fpk38j` (or legacy `prov:`) | registry handle | yes |
 
 This is not a new idea — it is the library's own. `Addressing::{Path, Id, Alias}`
 and `Link::parse` have always disambiguated a target by its syntax; the CLI had
@@ -371,7 +371,7 @@ rest of the surface now speaks one grammar.
 
 ## CLI test coverage is one file old
 
-`colophon-cli/tests/targets.rs` is the **first** test over the binary; before it,
+`prov-cli/tests/targets.rs` is the **first** test over the binary; before it,
 every CLI behaviour — flag vocabulary, output, exit codes, the interview — was
 untested, which is why `--in`/`--in-title` confusion shipped twice. The library is well
 covered and the CLI is not, and the gap is not cosmetic: the bugs that reached a real
@@ -396,11 +396,11 @@ hide here and should be separated before either is fixed:
   isn't detection at all, it's **collision-avoidance with mirror's own synthesis
   target** wearing detection's clothes. The honest rewrite is a structural predicate
   (`route::declares_containment` is one already) plus *adopt-the-file-at-the-synth-path*
-  — after which the name only matters because it's the name colophon itself chose.
+  — after which the name only matters because it's the name prov itself chose.
   Note this changes `readme` handling: a structureless `README.md` stops being a
   folder node and becomes a child. That's correct, and it's exactly why the stems
   belong in config as the *user's* declared convention rather than core's guess.
-- **Naming what colophon *creates* is legitimate but still shouldn't be a literal.**
+- **Naming what prov *creates* is legitimate but still shouldn't be a literal.**
   `synth_path`'s `index.{ext}` is an authoring default like `default_embed_format`,
   and belongs beside it in `WorkspaceConfig`.
 
@@ -430,7 +430,7 @@ which of the two questions it answered. Deferred deliberately, not overlooked.
 
 ## Link-syntax layer (this session's thread)
 
-- ✅ **Workspace `LinkStyle`** — colophon's analogue of diaryx's `LinkFormat`
+- ✅ **Workspace `LinkStyle`** — prov's analogue of diaryx's `LinkFormat`
   (`markdown_root` / `markdown_relative` / `plain_relative` / `plain_canonical`),
   read from the root's `link_format` frontmatter, honored by autofix (titled,
   style-native links). `link.rs` now has `format_link` + `path_to_title`; render
@@ -439,17 +439,17 @@ which of the two questions it answered. Deferred deliberately, not overlooked.
   paths directly; they should use `format_link(self.link_style(), …)` so *all*
   authoring is style-consistent (and `mv` becomes style-faithful — the earlier
   round-trip-faithfulness item folds into this).
-- **Own the link-syntax layer in colophon (don't publish a 3rd crate).** Having
+- **Own the link-syntax layer in prov (don't publish a 3rd crate).** Having
   now read diaryx's `link_parser` (~1900 lines, well-tested: parse/canonicalize/
   format-in-4-styles/convert/relative/title), the clean end-state per DESIGN §9
-  is colophon *owning* this and diaryx depending on colophon — not a speculative
+  is prov *owning* this and diaryx depending on prov — not a speculative
   shared crate. **Decisions taken (this session):**
-  - **Model — colophon's `ReferenceStyle` is canonical; diaryx rewrites onto it.**
-    colophon's axes (`Wrapper` × `Addressing` × `LinkStyle`) already *subsume*
+  - **Model — prov's `ReferenceStyle` is canonical; diaryx rewrites onto it.**
+    prov's axes (`Wrapper` × `Addressing` × `LinkStyle`) already *subsume*
     diaryx's flat `LinkFormat`: each of its 4 variants is
     `Wrapper::Markdown × Addressing::Path × {one LinkStyle}`. diaryx maps its enum
     as a thin compat shim on its own side and deletes `link_parser.rs`. The
-    id/alias/wikilink axes are colophon-native, no diaryx equivalent.
+    id/alias/wikilink axes are prov-native, no diaryx equivalent.
   - **Bare paths — `resolve()` stays `bare = directory-relative`** (which already
     matches diaryx's legacy `Ambiguous` reading), so **no `PathType` machinery** is
     ported: the ambiguity is settled by committing to one meaning, not tagging it.
@@ -458,9 +458,9 @@ which of the two questions it answered. Deferred deliberately, not overlooked.
     but `resolve()` reads bare as dir-relative, so those links resolve correctly
     only for documents at the workspace root.
   - **Migration wrinkle this creates.** diaryx's `plain_canonical` *means*
-    bare-root-relative, which colophon will no longer offer — so a diaryx workspace
+    bare-root-relative, which prov will no longer offer — so a diaryx workspace
     on `plain_canonical` can't just remap the enum; its links resolve differently
-    under colophon's resolver. `colophon relink --to markdown_root` is the bridge
+    under prov's resolver. `prov relink --to markdown_root` is the bridge
     (rewrites bare-root paths to `/`-prefixed), so the converter is the cutover
     tool, not merely a convenience.
   - **Scope — full port, including body `[text](path)` link resolution.** Two

@@ -1,7 +1,7 @@
 name: CI
-# Build, lint, and test the colophon workspace on every push and pull request.
+# Build, lint, and test the prov workspace on every push and pull request.
 #
-# colophon's parser dependencies (`fig`, `twig-doc`) are Zig-backed — their
+# prov's parser dependencies (`fig`, `twig-doc`) are Zig-backed — their
 # build.rs runs `zig build` — so every job that *compiles* code needs the pinned
 # Zig toolchain, exactly as the release (Homebrew) workflow does. The `fmt` job is
 # the one exception: `cargo fmt --check` only parses, never builds, so it needs no
@@ -64,11 +64,11 @@ jobs:
     - uses: mlugg/setup-zig@v2
       with: { version: "0.16.0" }
     - uses: Swatinem/rust-cache@v2
-    - run: cargo build -p colophon-cli
+    - run: cargo build -p prov-cli
     - run: ci/check-getting-started.sh
 
   # Build on the crate's declared minimum supported Rust version. A build, not a
-  # test run: MSRV is a promise about who can *compile* colophon, and the
+  # test run: MSRV is a promise about who can *compile* prov, and the
   # dev-dependencies/test tooling need not hold to it. The version is read from
   # `workspace.package.rust-version` in Cargo.toml, so the pin can never drift
   # from the declared floor — bump it there and this job follows.

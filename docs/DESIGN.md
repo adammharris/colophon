@@ -1,13 +1,13 @@
 ```fig
-part_of = [colophon](/README.md)
+part_of = [prov](/README.md)
 ```
-# colophon — design & vision
+# prov — design & vision
 
 > A *self-describing plaintext workspace*: a set of documents whose structure
 > lives in the documents' own embedded metadata, not in the filesystem layout or
 > an app-private sidecar folder.
 
-This document captures the reasoning behind colophon — what it is, the positions
+This document captures the reasoning behind prov — what it is, the positions
 it takes, the positions it deliberately leaves open, and why. It is the crate's
 north star; when a decision is unclear, it should be resolvable from here.
 
@@ -15,11 +15,11 @@ north star; when a decision is unclear, it should be resolvable from here.
 
 ## 1. The thesis
 
-A colophon (the bibliographic term) is the note in which a book describes its own
-making — the type, the paper, the press. The crate takes that literally: a
-colophon workspace is one you can hand to *any* tool and it explains itself.
-Follow the links declared in each document's metadata and the whole structure
-unfolds, anchored by a distinguished root that describes the whole.
+**prov** — *Plaintext Records, Organized & Verifiable* (and the usual short form
+of *provenance*) — describes itself the way its documents do. A prov workspace is
+one you can hand to *any* tool and it explains itself. Follow the links declared
+in each document's metadata and the whole structure unfolds, anchored by a
+distinguished root that describes the whole.
 
 The one inversion that defines the crate:
 
@@ -28,7 +28,7 @@ The one inversion that defines the crate:
 
 That single move is the entire value proposition. A filesystem has no
 self-description (structure is imposed from outside, by directory nesting). A
-database has a schema, but it lives outside the data. A colophon workspace keeps
+database has a schema, but it lives outside the data. A prov workspace keeps
 the structure *in the documents*, in plaintext, in the open — portable, diffable,
 and legible without the app that produced it.
 
@@ -52,17 +52,17 @@ Nothing about "diary", "journal", or even "contents" is baked into the core.
 `RelationSet::diaryx()` is merely a preset; the test suite proves a `part`/`whole`
 vocabulary works identically with zero diaryx assumptions.
 
-### Where configuration starts and ends — *does colophon read it back?*
+### Where configuration starts and ends — *does prov read it back?*
 
 The line above ("mechanism fixed, vocabulary flexible") raises a recurring
 question every new field forces: is *this* thing configurable, and how far? The
-operative test is one question — **does colophon read the value back and reason
+operative test is one question — **does prov read the value back and reason
 about it?** — and it sorts every field into three tiers:
 
 1. **Mechanism — not configurable.** How structure works, that integrity is
-   checkable, that identity is additive, and *the format of anything colophon
-   itself maintains*. A colophon-maintained value must be machine-standard
-   because colophon has to parse, compare, and rewrite it reliably — years later,
+   checkable, that identity is additive, and *the format of anything prov
+   itself maintains*. A prov-maintained value must be machine-standard
+   because prov has to parse, compare, and rewrite it reliably — years later,
    on another tool, after a merge. The `sha256:` fixity digest, the opaque id, the
    registry, an RFC 3339 `updated` timestamp: all live here. They are
    standardized *precisely because* they are not for human eyes but for machine
@@ -70,34 +70,34 @@ about it?** — and it sorts every field into three tiers:
 2. **Vocabulary & representation — configurable.** The *names and surface
    spellings* of those mechanisms: which fields are relations, the spanning one,
    reference styles, id storage, embed format, the *name* of the `updated` field,
-   whether a feature is on. Configuring a workspace means re-spelling colophon's
+   whether a feature is on. Configuring a workspace means re-spelling prov's
    fixed mechanisms for your vault — never redefining them. Essentially all
-   colophon config lives here.
-3. **Content — not colophon's business.** Everything colophon merely *carries*:
-   `title`, a user's own `date`, arbitrary frontmatter, the body. colophon never
+   prov config lives here.
+3. **Content — not prov's business.** Everything prov merely *carries*:
+   `title`, a user's own `date`, arbitrary frontmatter, the body. prov never
    reasons about these, so there is nothing to standardize and nothing to
    configure — the user owns them completely, today, just by writing them.
 
-The tension this resolves is the seductive middle option: a colophon-*maintained*
+The tension this resolves is the seductive middle option: a prov-*maintained*
 field that the user also *formats*. That combination is incoherent — the moment
-colophon must round-trip a value it has to understand the format, and parsing
+prov must round-trip a value it has to understand the format, and parsing
 arbitrary user formats (ambiguous, locale-dependent, lossy) is exactly the
 fragility an archive cannot afford. So the real boundary is:
 
-> **colophon-maintained ⟹ colophon owns the format. User-formatted ⟹ the user
-> maintains it.** There is no "colophon maintains a field whose format it does not
+> **prov-maintained ⟹ prov owns the format. User-formatted ⟹ the user
+> maintains it.** There is no "prov maintains a field whose format it does not
 > understand."
 
 The corollary — **store canonical, render pretty**: human-friendly formatting is
-a *presentation* concern (a viewer, an export), never a storage one. colophon
+a *presentation* concern (a viewer, an export), never a storage one. prov
 stores the canonical machine value (RFC 3339 `…Z`); a UI displays it however the
 reader likes. This is why "let users choose the timestamp format" never becomes a
 storage-config question: a user who wants a pretty date authors a `date` field
-colophon never reads (tier 3), while the maintained `updated` field (tier 1/2 —
+prov never reads (tier 3), while the maintained `updated` field (tier 1/2 —
 fixed format, configurable *name*) stays trustworthy. The two pulls stop fighting
 because they are aimed at two different fields.
 
-So: **config exists to rename and re-spell colophon's mechanisms — never to
+So: **config exists to rename and re-spell prov's mechanisms — never to
 reformat its machine-state (fixed) or to manage your content (already yours).**
 
 ## 3. Structure: a spanning tree with an overlay graph
@@ -174,7 +174,7 @@ B is chosen because the model falls out clean:
   opaque IDs to reconcile, no path-hash collision dance.
 - "Rederivable unless published" becomes literally true: unregistered = addressed
   by path (nothing stored); registered = minted, in the registry.
-- It cleanly separates the two identity layers: the **internal colophon ID**
+- It cleanly separates the two identity layers: the **internal prov ID**
   (minted opaque, for in-workspace stable links) and the **published permalink**
   (an ARK blade in diaryx, for external URLs). Publishing implies registration;
   linking-by-id implies registration; they are distinct events, and the internal
@@ -195,22 +195,22 @@ linked — is judged negligible.
 
 Registration needs **two paths**, and both must exist:
 
-1. **Eager** — when colophon itself authors an ID reference, it registers
+1. **Eager** — when prov itself authors an ID reference, it registers
    atomically.
-2. **Reconciling** — a validation pass scans for `[[colophon:id]]` references that
+2. **Reconciling** — a validation pass scans for `[[prov:id]]` references that
    arrived out-of-band (paste, `git merge`, another editor) and registers/repairs
    them. This reuses the validation module (§7).
 
 **Known hazard:** the one unrecoverable case is an out-of-band edit that inserts a
-raw ID reference and then moves the target *before* colophon ever reconciles. The
-durable reference was created behind colophon's back; nothing can save it. The
+raw ID reference and then moves the target *before* prov ever reconciles. The
+durable reference was created behind prov's back; nothing can save it. The
 mitigation is reconcile-on-load, and this is documented as a limitation rather
 than pretended airtight.
 
 ## 5. The index: one artifact, two natures
 
 The ID registry, the materialized graph, and the resolution cache all want to be
-the *same* artifact — one `IndexStore` that colophon keeps consistent as part of
+the *same* artifact — one `IndexStore` that prov keeps consistent as part of
 its normal mutation job, serialized (via `fig`) to any supported format and
 stored anywhere. That convergence is elegant, but it hides a sharp edge that the
 design must respect:
@@ -230,11 +230,11 @@ Consequences the implementation must honor:
 - **The registry's write belongs in the same unit as the documents it describes.**
   This falls straight out of the two natures. A derived cache may lag: if it is
   stale, rebuild it. Authoritative state may not — a mutation that maintains three
-  documents' links but loses its `id → path` update leaves every `colophon:<id>`
+  documents' links but loses its `id → path` update leaves every `prov:<id>`
   reference to the moved document resolving to nothing, and *nothing in the
   workspace can repair it*, because the mapping was never in the documents to
   begin with. So a mutation stages its registry write into the same `ChangeSet`
-  (`colophon/src/change.rs`) as its document edits, and the two land or fail
+  (`prov/src/change.rs`) as its document edits, and the two land or fail
   together. The corollary is the honest half: the frontmatter *shadow* copy
   (`id_storage: frontmatter`) is derived — idempotently re-stamped from the
   registry on any later run — so it is deliberately left outside that unit. What
@@ -265,7 +265,7 @@ queries — an LSP, a static-site builder, a TUI — without re-walking.
 ## 6. Wikilinks and positioning
 
 The user-facing payoff of registered identity is stable, location-independent
-links: `[[colophon:ajp7eq|My file]]`. Authoring such a link, or publishing, *is*
+links: `[[prov:ajp7eq|My file]]`. Authoring such a link, or publishing, *is*
 the registration event.
 
 This is deliberately Obsidian-shaped, with one decisive difference:
@@ -274,14 +274,14 @@ This is deliberately Obsidian-shaped, with one decisive difference:
 
 Obsidian's link-rewrite-on-rename, its graph, its block IDs — all of that
 intelligence lives *in the app*, and the state lives in an opaque dotfolder the
-user cannot read with another tool. colophon inverts exactly that: the same
+user cannot read with another tool. prov inverts exactly that: the same
 superpowers (stable IDs, backlinks, rename-safety), but the identity state is
 *data the user owns* — in their tree, in any `fig` format, versioned with their
-content. colophon is that vault intelligence as a portable, embeddable library.
+content. prov is that vault intelligence as a portable, embeddable library.
 
 Ownership alone is not enough, though: a readable registry in an unlinked
 dotfolder is still `.obsidian/` with a nicer file format. The property that
-actually distinguishes a colophon workspace is **reachability** — the root
+actually distinguishes a prov workspace is **reachability** — the root
 document links its registry through the `registry` relation, so following the
 links from the root discovers the identity state like everything else. Where
 the registry lives is a fact about the workspace, declared in the workspace;
@@ -301,18 +301,18 @@ like any other link.
 - **`fig` and `serde` both behind features.** `fig` has its own `serde` feature,
   so targeting the value tree as the common currency makes the backend a
   build-time choice the core never sees. `fig` is already published in multiple
-  places; shipping it natively is defensible (the "fig + colophon" ecosystem),
+  places; shipping it natively is defensible (the "fig + prov" ecosystem),
   while a `serde` backend keeps the door open for those who do not want the Zig
   toolchain `fig`'s build requires.
 - **Multi-format embedded metadata.** The crate is agnostic about the *format*
   of the embedded block — YAML (`---`), JSON (`;;;`), fig-native
   (```` ```fig ````), endmatter — anything `fig` recognizes. The **fence layer**
-  turned out to live in `fig` itself, not colophon: `fig::detect` sniffs the
+  turned out to live in `fig` itself, not prov: `fig::detect` sniffs the
   archetype (fig 2.1, upstreamed from this project's needs), `fig::split`
   separates content from body, and `EmbedType::inner_format` couples each fence
-  style to its format so invalid combinations are unspellable. colophon records
+  style to its format so invalid combinations are unspellable. prov records
   the detected `EmbedType` on every `Document` so writes **preserve the original
-  format and layout** (never rewrite a ```` ```fig ```` block as YAML). colophon
+  format and layout** (never rewrite a ```` ```fig ```` block as YAML). prov
   feature gates (`yaml`, `json`, `fig`, …) forward to the corresponding `fig`
   feature. A useful consequence: the sidecar index need not match the document
   format — documents can be YAML while the index is fig-native for parse speed.
@@ -324,13 +324,13 @@ and should be a loud, first-class feature — not a footnote. The model: a set o
 `ValidationError` variants (broken spanning-parent, broken contains-reference,
 orphan, cycle-where-disallowed, missing backlink, dangling/unregistered ID) plus
 warnings and an autofixer. It returns findings; it does not panic. It also hosts
-the reconcile pass from §4 (an unregistered `[[colophon:id]]` reference is just
+the reconcile pass from §4 (an unregistered `[[prov:id]]` reference is just
 another finding with an autofix: register it, or flag it if it cannot resolve).
 
 **Discovery is reachability-bounded.** The orphan check does not scan the whole
 subtree — it inspects only the directories a linked document already occupies,
 and never recursively. A subdirectory nothing links into (a vendored tree, a
-nested colophon workspace, a `scratch/` folder) is neither read nor reported, so
+nested prov workspace, a `scratch/` folder) is neither read nor reported, so
 `check` stays quiet about files that were never opted in. This is the same
 "invisible unless attached" rule §3's reachability applies to files, extended to
 directories: a directory enters scope only through an explicit act that links
@@ -338,7 +338,7 @@ into it (`new`, `adopt`, `attach`, a `mirror` import), after which `check` keeps
 it honest — and scope grows with the links. The deliberate trade is that a
 document dropped into a not-yet-linked folder is invisible rather than flagged;
 the alternative (flagging every stray file anywhere beneath the root) makes
-colophon unusable inside a larger repo. The recursive filesystem walk survives
+prov unusable inside a larger repo. The recursive filesystem walk survives
 only where it is an *explicit* import — `content_documents`/`plan_mirror` for
 `init --adopt mirror`, and `attach --all --recursive` — never in steady-state
 validation.
@@ -359,12 +359,12 @@ step.)
 
 ## 9. Extraction discipline & status
 
-colophon is being extracted from `diaryx_core`. Guiding rules:
+prov is being extracted from `diaryx_core`. Guiding rules:
 
 - **Read + write from the start.** The valuable, hard half is safe restructuring
   with link maintenance, which `diaryx_core` already does across ~18 mutation
   ops. There is no read-only milestone; a release waits until diaryx *can* depend
-  on colophon.
+  on prov.
 - **A beautiful API that forces a diaryx rewrite beats an ugly one that changes
   nothing.** Design the seams for their own sake; let real diaryx usage carve the
   ergonomics.
@@ -375,7 +375,7 @@ colophon is being extracted from `diaryx_core`. Guiding rules:
   (`diaryx_core`'s path-based frontmatter vs id-based sync records) reconciles
   here: id-based vs path-based becomes a choice of policy + resolver, not two
   parallel type hierarchies.
-- **Sequence.** Extract in place → diaryx depends on a local `colophon` → dogfood
+- **Sequence.** Extract in place → diaryx depends on a local `prov` → dogfood
   until the seams (IndexStore, format layer, registration) are proven → publish
   last.
 
@@ -394,23 +394,23 @@ not yet ported.
 | Identity storage axis (§5 escape hatch) | `config`/`workspace`/CLI | ✅ `IdStorage`, spelled `id_storage: both` (**default**: stamp each doc's own `id` field + keep the registry as a rebuildable cache) · `registry` (only in the registry document) · `frontmatter` (no registry; id→path rebuilt by `Workspace::scan_ids`, tombstones forfeited). `init` prompts frontmatter vs registry; `--id-storage frontmatter-only` reaches the third. Frontmatter storage makes identity move/copy-robust — the ID travels with the file |
 | Registry reachability | `relation`/`workspace` | ✅ the root links its registry via the `registry` relation (in the diaryx preset); `Workspace::registry_path` discovers it by following the link — never an app-private sidecar path |
 | Config files as documents | `document`/`edit` | ✅ `.yaml`/`.yml`/`.json`/`.fig`/`.figl` parse as whole-file-metadata documents (`MetaCarrier::WholeFile`); carrier-aware `MetaEditor` edits both shapes preserving comments/format |
-| Config vocabulary + homes | `config`/CLI | ✅ one nested namespace (`docs/config-vocab.md`) with two homes — nested under `colophon:` in the root's frontmatter (the description home) or top-level in the dedicated config document (the policy home), precedence *config doc > root block > default*; the `config`/`registry`/`recycle_bin` **pointer relations** stay top-level as structure. Reference style is the orthogonal `references: { notation (markdown\|wikilink\|bare) × path_style (root\|relative\|canonical), target, label }` (internally `LinkStyle` extended to the 2×3 cross-product); `metadata: { format, embed }`; `id_storage: registry\|frontmatter\|both`; a `spec` version marker. `colophon config <k> <v>` addresses nested axes by dotted key and refuses to write a setting `check` would flag |
-| ID links (`colophon:<id>` targets) | `link`/`tree`/`validate`/`mutate` | ✅ resolve through the registry everywhere paths do; never rewritten by moves (the registry update is the maintenance); findings: `MalformedId` (check char), `DanglingId` (tombstoned vs never-issued) |
+| Config vocabulary + homes | `config`/CLI | ✅ one nested namespace (`docs/config-vocab.md`) with two homes — nested under `prov:` in the root's frontmatter (the description home) or top-level in the dedicated config document (the policy home), precedence *config doc > root block > default*; the `config`/`registry`/`recycle_bin` **pointer relations** stay top-level as structure. Reference style is the orthogonal `references: { notation (markdown\|wikilink\|bare) × path_style (root\|relative\|canonical), target, label }` (internally `LinkStyle` extended to the 2×3 cross-product); `metadata: { format, embed }`; `id_storage: registry\|frontmatter\|both`; a `spec` version marker. `prov config <k> <v>` addresses nested axes by dotted key and refuses to write a setting `check` would flag |
+| ID links (`prov:<id>` targets) | `link`/`tree`/`validate`/`mutate` | ✅ resolve through the registry everywhere paths do; never rewritten by moves (the registry update is the maintenance); findings: `MalformedId` (check char), `DanglingId` (tombstoned vs never-issued) |
 | Workspace composition + builder | `workspace` | ✅ type-flipping builder |
 | Traverse (spanning tree from a root) | `tree` | ✅ `Workspace::tree`; missing/cyclic/unreadable targets are marked nodes |
 | Scan (directory-driven discovery) | `workspace`/`intake` | ✅ the orphan check is **reachability-bounded** (`direct_child_files` over reached directories, §8) — quiet inside a larger repo; the recursive `Workspace::content_documents` survives only for explicit imports (`plan_mirror` → a `StructurePlan`, `attach --all --recursive`) |
-| Mutation with link maintenance | `mutate` | ✅ `create`/`rename`/`delete`/`recycle`/`restore`/`empty_bin`/`adopt`/`separate`/`combine`/`duplicate` (parent entry, inverse links, re-relativization, labels kept; fig `Embed` edits). `recycle` is the recoverable delete (see the recycle-bin row); `delete` is the hard one. `adopt` links an *existing* file both ways without touching its body — the onboarding complement of `create` (`docs/init-adoption.md`, Phase 1), driving `init --adopt` and the orphan autofix. `duplicate` copies a node as a fresh sibling under the same parent (fresh name, **no** cloned ID or children — a shallow copy, so no child gains a second parent), copying a separated node's body file too. **Non-goals vs diaryx** (`convert_to_index`/`convert_to_leaf`, `attach_and_move_entry_to_parent`): these reify diaryx's *directory-shaped* containment — a node earns children by becoming a folder, attaching moves the file into the parent's directory. colophon's containment is link-shaped (§3, §8): a node gains contents in place and `adopt` links without moving, so there is nothing to convert between and no move-on-attach. The external id-sync hooks (`sync_*_metadata`) are folded into the per-op index maintenance behind the `IndexStore` seam (§9) |
-| Validation | `validate` | ✅ findings: broken link, case mismatch, duplicate containment, missing inverse, unreadable, malformed/dangling id, ambiguous alias, **id mismatch** + **unregistered id** (the frontmatter-storage reconcile pair), **orphan** (a content document on disk nothing reachable links to — the onboarding signal, `docs/init-adoption.md`), **fixity mismatch** (see the fixity row), **config issue** (a key in either config surface — the root's `colophon:` block or the linked config document — that `WorkspaceConfig::apply` silently ignores: a misspelled key that resembles a real axis, or a recognized axis with a value colophon can't parse; `config::diagnose` is the shared judgment, so `colophon config <key> <value>` refuses to *write* the same, and near-miss detection leaves user-owned fields alone per §2), **config spec-ahead** (a surface declares a `spec` newer than this build understands, so newer settings may be ignored — `config::spec_ahead`, shared with the CLI's proactive warning). Autofix: missing inverse ✅; id mismatch → trust the registry (rewrite frontmatter) ✅; unregistered id → adopt into the registry ✅; fixity mismatch → re-stamp to the current bytes (confirmation-gated) ✅; orphan + config-issue + config-spec-ahead + body-link findings stay diagnosis-only |
-| Fixity (content checksums) | `fixity`, `attach`, `validate` | ✅ the archival integrity question link-checking cannot answer — *are the bytes still the bytes?* A dependency-free, NIST-vector-tested SHA-256 (WASM-clean, spelled `sha256:<hex>` so an auditor verifies it with `sha256sum` — tool-agnostic like everything else). `check` grows a bit-rot pass over the reachable set, emitting `FixityMismatch`; it honors any recorded hash regardless of the fixity *setting* (which governs what is written), never false-alarming on an unrecorded or unrecognized digest. Config axis `fixity: off \| attachments \| all` (default **attachments**). `attachments` — attachment sidecars record a `content_hash` of their bytes (frictionless: a payload is never edited, so a change is unambiguously corruption). `all` — documents additionally hash their *body* (never frontmatter, so colophon's own link maintenance never disturbs it); because a body is editable, `colophon edit` opens `$EDITOR` and restamps on save, and an out-of-band edit is a re-stampable finding rather than a hard error (`Workspace::restamp_fixity`) |
+| Mutation with link maintenance | `mutate` | ✅ `create`/`rename`/`delete`/`recycle`/`restore`/`empty_bin`/`adopt`/`separate`/`combine`/`duplicate` (parent entry, inverse links, re-relativization, labels kept; fig `Embed` edits). `recycle` is the recoverable delete (see the recycle-bin row); `delete` is the hard one. `adopt` links an *existing* file both ways without touching its body — the onboarding complement of `create` (`docs/init-adoption.md`, Phase 1), driving `init --adopt` and the orphan autofix. `duplicate` copies a node as a fresh sibling under the same parent (fresh name, **no** cloned ID or children — a shallow copy, so no child gains a second parent), copying a separated node's body file too. **Non-goals vs diaryx** (`convert_to_index`/`convert_to_leaf`, `attach_and_move_entry_to_parent`): these reify diaryx's *directory-shaped* containment — a node earns children by becoming a folder, attaching moves the file into the parent's directory. prov's containment is link-shaped (§3, §8): a node gains contents in place and `adopt` links without moving, so there is nothing to convert between and no move-on-attach. The external id-sync hooks (`sync_*_metadata`) are folded into the per-op index maintenance behind the `IndexStore` seam (§9) |
+| Validation | `validate` | ✅ findings: broken link, case mismatch, duplicate containment, missing inverse, unreadable, malformed/dangling id, ambiguous alias, **id mismatch** + **unregistered id** (the frontmatter-storage reconcile pair), **orphan** (a content document on disk nothing reachable links to — the onboarding signal, `docs/init-adoption.md`), **fixity mismatch** (see the fixity row), **config issue** (a key in either config surface — the root's `prov:` block or the linked config document — that `WorkspaceConfig::apply` silently ignores: a misspelled key that resembles a real axis, or a recognized axis with a value prov can't parse; `config::diagnose` is the shared judgment, so `prov config <key> <value>` refuses to *write* the same, and near-miss detection leaves user-owned fields alone per §2), **config spec-ahead** (a surface declares a `spec` newer than this build understands, so newer settings may be ignored — `config::spec_ahead`, shared with the CLI's proactive warning). Autofix: missing inverse ✅; id mismatch → trust the registry (rewrite frontmatter) ✅; unregistered id → adopt into the registry ✅; fixity mismatch → re-stamp to the current bytes (confirmation-gated) ✅; orphan + config-issue + config-spec-ahead + body-link findings stay diagnosis-only |
+| Fixity (content checksums) | `fixity`, `attach`, `validate` | ✅ the archival integrity question link-checking cannot answer — *are the bytes still the bytes?* A dependency-free, NIST-vector-tested SHA-256 (WASM-clean, spelled `sha256:<hex>` so an auditor verifies it with `sha256sum` — tool-agnostic like everything else). `check` grows a bit-rot pass over the reachable set, emitting `FixityMismatch`; it honors any recorded hash regardless of the fixity *setting* (which governs what is written), never false-alarming on an unrecorded or unrecognized digest. Config axis `fixity: off \| attachments \| all` (default **attachments**). `attachments` — attachment sidecars record a `content_hash` of their bytes (frictionless: a payload is never edited, so a change is unambiguously corruption). `all` — documents additionally hash their *body* (never frontmatter, so prov's own link maintenance never disturbs it); because a body is editable, `prov edit` opens `$EDITOR` and restamps on save, and an out-of-band edit is a re-stampable finding rather than a hard error (`Workspace::restamp_fixity`) |
 | Storage adapter + executor | `fs`, `exec` | ✅ `StdFs` + dependency-free `block_on`. The port **declares durability capabilities** (`Capabilities { atomic_replace, durable_sync, native_transactions }`, pessimistic by default) so the crash-safety layer adapts to each backend rather than assuming — `StdFs` reports `LOCAL_FS`, and the OPFS/IndexedDB adapters will report their own (IndexedDB's `native_transactions` earning it a bypass of the journal). `sync` (fsync file + parent dir, the dir step `#[cfg(unix)]`) and `write_atomic` (write-temp → sync → rename → sync, degrading honestly where atomic rename is absent) are the two primitives; every `FileOp::Write` lands through `write_atomic` |
-| Crash-atomic change sets + journal | `change`, `journal` | ✅ **error atomicity** (in-memory unwind on any failed write) **and crash atomicity**. Per file: `write_atomic` means no document is caught half-written even by a power cut. For the whole set: a checksummed write-ahead journal — a single transient root dotfile (`.colophon-journal`), written and flushed *before* any document (the commit point), removed on success — that `recover` (run by `check`) rolls forward idempotently after a crash. An interrupted set therefore always resolves consistent: fully-before on a caught error, fully-after on a crash. The registry write still rides the same set (§5). Remaining: an IndexedDB backend delegating to its native transaction instead of the journal |
+| Crash-atomic change sets + journal | `change`, `journal` | ✅ **error atomicity** (in-memory unwind on any failed write) **and crash atomicity**. Per file: `write_atomic` means no document is caught half-written even by a power cut. For the whole set: a checksummed write-ahead journal — a single transient root dotfile (`.prov-journal`), written and flushed *before* any document (the commit point), removed on success — that `recover` (run by `check`) rolls forward idempotently after a crash. An interrupted set therefore always resolves consistent: fully-before on a caught error, fully-after on a crash. The registry write still rides the same set (§5). Remaining: an IndexedDB backend delegating to its native transaction instead of the journal |
 | Recycle bin (recoverable delete) | `mutate`, `relation`, `config` | ✅ a first-class, **reachable** member (a `recycle_bin` pointer relation off the root, discovered by `Workspace::recycle_bin_path` — the registry's anti-`.obsidian/` move, §5/§6), not an app-private folder. `recycle` moves a document (bytes verbatim) into a visible `recyclebin/` and records a tombstone in its self-describing index (validated by `check`); the bytes park under an *unreached* `recyclebin/items/` so §8's orphan check ignores them. `restore` reverses it losslessly (bytes back, parent re-linked, ID re-registered); `empty_bin` is the only hard purge, always explicit. All three are one journaled ChangeSet. Config axis `recycle_bin` (on by default — the safe archival posture — opt-out per workspace); the CLI routes `rm` to the bin unless `--purge`, and adds `restore`/`empty-bin` |
 | Link text + path arithmetic | `link` | ✅ labeled links, resolve/relative, lexical normalize |
-| Single-document edits | `edit` | ✅ format-preserving `set`/`unset` over text; `colophon edit` opens `$EDITOR` and, on a real content change, calls `Workspace::record_content_update` — one crash-safe write that restamps the fixity checksum (under `all`) and stamps the configured `updated` field (empty = off) with an RFC 3339 UTC instant the CLI supplies (the library stays clockless, DESIGN §2). Gated on actual change (byte-compared across the editor), so an open-and-quit stamps nothing |
+| Single-document edits | `edit` | ✅ format-preserving `set`/`unset` over text; `prov edit` opens `$EDITOR` and, on a real content change, calls `Workspace::record_content_update` — one crash-safe write that restamps the fixity checksum (under `all`) and stamps the configured `updated` field (empty = off) with an RFC 3339 UTC instant the CLI supplies (the library stays clockless, DESIGN §2). Gated on actual change (byte-compared across the editor), so an open-and-quit stamps nothing |
 | Multi-format embedded metadata | `document`/`meta` | ✅ read side (fig 2.1's `detect` + `split` *are* the fence layer); ⏳ format-preserving writes ride the mutation port |
 | serde / fig backend split | — | ⏳ planned (feature gates) |
 | Filesystem intake (`mirror` import) | `intake` | ✅ `plan_mirror` → `StructurePlan` (previewable) → `apply_plan` folds a directory tree into the containment tree, synthesizing folder-notes for bare dirs and reusing `create`/`adopt`; drives `init --adopt mirror` (`docs/init-adoption.md`, Phase 2). The `StructureSource` *trait* (frontmatter/hybrid sources) is deferred until a second source needs it |
-| Route addressing (`mkdir -p` for containment) | `route` | ✅ `plan_route` → `RoutePlan` (previewable) → `apply_route` walks a route (`Daily/2026/2026-07` — each segment the *title* of a child of the last) from a start document and synthesizes the segments that don't resolve, reusing `intake`'s `SynthNode` + `create_titled`. Drives `colophon new --under <route> -p [--layout nested\|flat]`, whose point is the recurring-entry workflow (a daily note whose month index doesn't exist yet on the 1st). Vocabulary-neutral by construction — no date, no "daily", nothing diaryx (§2): the shell supplies the policy, colophon the one part a shell can't express. `Layout` governs *file placement only*, never the graph. Resolution is bounded (only the children of nodes on the route are read) and does **not** trip §8's alias-spanning hazard, since it descends from a known node rather than needing every title up front |
+| Route addressing (`mkdir -p` for containment) | `route` | ✅ `plan_route` → `RoutePlan` (previewable) → `apply_route` walks a route (`Daily/2026/2026-07` — each segment the *title* of a child of the last) from a start document and synthesizes the segments that don't resolve, reusing `intake`'s `SynthNode` + `create_titled`. Drives `prov new --under <route> -p [--layout nested\|flat]`, whose point is the recurring-entry workflow (a daily note whose month index doesn't exist yet on the 1st). Vocabulary-neutral by construction — no date, no "daily", nothing diaryx (§2): the shell supplies the policy, prov the one part a shell can't express. `Layout` governs *file placement only*, never the graph. Resolution is bounded (only the children of nodes on the route are read) and does **not** trip §8's alias-spanning hazard, since it descends from a known node rather than needing every title up front |
 
 ## 10. Open questions
 
@@ -418,7 +418,7 @@ not yet ported.
    **Answered: yes, minimally — tombstones, not history.** Deleting a document
    retires its ID to a tombstone (`id: null` in the snapshot): the ID stops
    resolving but is never forgotten, so mint-by-rejection can never reissue it
-   and a dangling `colophon:` reference stays *diagnosable* ("that document was
+   and a dangling `prov:` reference stays *diagnosable* ("that document was
    deleted" vs "never issued here"). This is cheaper than an append-only log —
    the registry stays a sorted, diff-friendly snapshot — while still refusing to
    let an ID silently change meaning. Full history/event-log stores remain
@@ -434,6 +434,6 @@ not yet ported.
    frontmatter/hybrid sources) is deferred until a second source demands it — so
    the answer is "first-class in capability, un-abstracted until it pays for
    itself."
-3. **Is the internal colophon ID ever unified with the published permalink**, or
+3. **Is the internal prov ID ever unified with the published permalink**, or
    do they stay two layers (internal minted opaque ID; external ARK permalink)?
    Model B keeps them separable; nothing yet forces them together.

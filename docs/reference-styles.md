@@ -1,10 +1,10 @@
 ```fig
-part_of = [colophon](/README.md)
+part_of = [prov](/README.md)
 ```
 # Reference styles
 
 How a durable reference — a relation target in metadata, or (eventually) a body
-link — is *spelled*. colophon exposes every option as configuration; a curated
+link — is *spelled*. prov exposes every option as configuration; a curated
 frontend (diaryx) picks one. This is the identity-vs-readability dial made
 explicit.
 
@@ -39,9 +39,9 @@ style says *how a path is resolved* (root / relative / canonical).
   title — cosmetic, refreshable. `check` can flag a stale one (`StaleLabel`,
   staged) and refresh it, turning "fallible cache" into "maintained cache."
 
-The `id:` scheme replaces the older `colophon:` spelling (de-branded, shorter,
-still explicit and diagnosable, and — unlike a `colophon://` URL — it does not
-collide with `is_external`'s `://` check). `colophon:` is still recognized on
+The `id:` scheme replaces the older `prov:` spelling (de-branded, shorter,
+still explicit and diagnosable, and — unlike a `prov://` URL — it does not
+collide with `is_external`'s `://` check). `prov:` is still recognized on
 read for backward compatibility.
 
 `alias` implies `wikilink` (neither `markdown` nor `bare` can address by bare
@@ -57,7 +57,7 @@ side is authored in its own relation's style. On read the resolver is
 style-agnostic: it takes whatever it finds and resolves it.
 
 ```yaml
-# workspace default (root `colophon:` block / config document)
+# workspace default (root `prov:` block / config document)
 references:
   notation: wikilink
   target: id
@@ -110,7 +110,7 @@ looked up; paths and `id:` targets are never diverted.
   `Notation` (`markdown`/`wikilink`/`bare`) and `PathStyle`
   (`root`/`relative`/`canonical`) axes compose to the internal `Wrapper` +
   extended `LinkStyle` (the 2×3 cross-product); `id:` scheme with legacy
-  `colophon:` read.
+  `prov:` read.
 - ✅ Per-relation `style` on `Relation` (`relation.rs`).
 - ✅ Workspace default + config keys (`config.rs`), authoring seam
   (`authored_target`) resolves per-relation style.
@@ -122,7 +122,7 @@ looked up; paths and `id:` targets are never diverted.
   `WorkspaceConfig::resolved_relation_styles` in `config.rs`;
   `RelationSet::with_styles` in `relation.rs`; wired through the CLI's workspace
   builder).
-- ✅ `colophon init` surfaces the model *wrapper-first*: `--wrapper`
+- ✅ `prov init` surfaces the model *wrapper-first*: `--wrapper`
   (markdown / wikilink) and `--link-style` set the workspace `notation`/
   `path_style`, then `--reference` picks the addressing (`path` / `id` / `alias`
   / `split` — the up≠down diaryx shape). The choices write the `references`

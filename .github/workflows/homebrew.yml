@@ -1,7 +1,7 @@
 name: Homebrew
-# Release the `colophon` CLI to Homebrew. Same shape as fig's homebrew.yml, but
-# the binaries are built with cargo (colophon is a Rust workspace; the CLI is
-# the `colophon-cli` crate, whose binary is named `colophon`). Three jobs:
+# Release the `prov` CLI to Homebrew. Same shape as fig's homebrew.yml, but
+# the binaries are built with cargo (prov is a Rust workspace; the CLI is
+# the `prov-cli` crate, whose binary is named `prov`). Three jobs:
 # 1. build macOS binaries (arm64, x86_64) and
 # 2. Linux binaries (x86_64, aarch64), attach them to this repo's GitHub
 #    Release, then
@@ -36,19 +36,19 @@ jobs:
       with: { version: "0.16.0" }
     - name: Build macOS arm64
       run: |
-        cargo build --release -p colophon-cli --target aarch64-apple-darwin
-        tar -czf colophon-macos-arm64.tar.gz -C target/aarch64-apple-darwin/release colophon
+        cargo build --release -p prov-cli --target aarch64-apple-darwin
+        tar -czf prov-macos-arm64.tar.gz -C target/aarch64-apple-darwin/release prov
     - name: Build macOS x86_64
       run: |
-        cargo build --release -p colophon-cli --target x86_64-apple-darwin
-        tar -czf colophon-macos-x86_64.tar.gz -C target/x86_64-apple-darwin/release colophon
+        cargo build --release -p prov-cli --target x86_64-apple-darwin
+        tar -czf prov-macos-x86_64.tar.gz -C target/x86_64-apple-darwin/release prov
     - name: Attach to the GitHub Release
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref_name }}
         files: |
-          colophon-macos-arm64.tar.gz
-          colophon-macos-x86_64.tar.gz
+          prov-macos-arm64.tar.gz
+          prov-macos-x86_64.tar.gz
   linux-binaries:
     name: Build + attach Linux binaries
     runs-on: ubuntu-latest
@@ -63,21 +63,21 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
     - name: Build Linux x86_64
       run: |
-        cargo build --release -p colophon-cli --target x86_64-unknown-linux-gnu
-        tar -czf colophon-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release colophon
+        cargo build --release -p prov-cli --target x86_64-unknown-linux-gnu
+        tar -czf prov-linux-x86_64.tar.gz -C target/x86_64-unknown-linux-gnu/release prov
     - name: Build Linux aarch64
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
       run: |
-        cargo build --release -p colophon-cli --target aarch64-unknown-linux-gnu
-        tar -czf colophon-linux-aarch64.tar.gz -C target/aarch64-unknown-linux-gnu/release colophon
+        cargo build --release -p prov-cli --target aarch64-unknown-linux-gnu
+        tar -czf prov-linux-aarch64.tar.gz -C target/aarch64-unknown-linux-gnu/release prov
     - name: Attach to the GitHub Release
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.ref_name }}
         files: |
-          colophon-linux-x86_64.tar.gz
-          colophon-linux-aarch64.tar.gz
+          prov-linux-x86_64.tar.gz
+          prov-linux-aarch64.tar.gz
   bump-formula:
     name: Bump tap formula
     runs-on: ubuntu-latest
@@ -87,46 +87,46 @@ jobs:
     - name: Compute checksums and render the Homebrew formula
       run: |
         version="${GITHUB_REF_NAME#v}"
-        base="https://github.com/adammharris/colophon/releases/download/${GITHUB_REF_NAME}"
-        mac_arm64_sha=$(curl -sL "$base/colophon-macos-arm64.tar.gz" | sha256sum | cut -d' ' -f1)
-        mac_x64_sha=$(curl -sL "$base/colophon-macos-x86_64.tar.gz" | sha256sum | cut -d' ' -f1)
-        linux_x64_sha=$(curl -sL "$base/colophon-linux-x86_64.tar.gz" | sha256sum | cut -d' ' -f1)
-        linux_arm64_sha=$(curl -sL "$base/colophon-linux-aarch64.tar.gz" | sha256sum | cut -d' ' -f1)
-        cat > /tmp/colophon.rb <<RUBY
-        class Colophon < Formula
-          desc "Command-line companion for the colophon self-describing workspace library"
-          homepage "https://github.com/adammharris/colophon"
+        base="https://github.com/adammharris/prov/releases/download/${GITHUB_REF_NAME}"
+        mac_arm64_sha=$(curl -sL "$base/prov-macos-arm64.tar.gz" | sha256sum | cut -d' ' -f1)
+        mac_x64_sha=$(curl -sL "$base/prov-macos-x86_64.tar.gz" | sha256sum | cut -d' ' -f1)
+        linux_x64_sha=$(curl -sL "$base/prov-linux-x86_64.tar.gz" | sha256sum | cut -d' ' -f1)
+        linux_arm64_sha=$(curl -sL "$base/prov-linux-aarch64.tar.gz" | sha256sum | cut -d' ' -f1)
+        cat > /tmp/prov.rb <<RUBY
+        class Prov < Formula
+          desc "Command-line companion for the prov self-describing workspace library"
+          homepage "https://github.com/adammharris/prov"
           version "$version"
           license "MIT OR Apache-2.0"
 
           on_macos do
             on_arm do
-              url "https://github.com/adammharris/colophon/releases/download/v$version/colophon-macos-arm64.tar.gz"
+              url "https://github.com/adammharris/prov/releases/download/v$version/prov-macos-arm64.tar.gz"
               sha256 "$mac_arm64_sha"
             end
             on_intel do
-              url "https://github.com/adammharris/colophon/releases/download/v$version/colophon-macos-x86_64.tar.gz"
+              url "https://github.com/adammharris/prov/releases/download/v$version/prov-macos-x86_64.tar.gz"
               sha256 "$mac_x64_sha"
             end
           end
 
           on_linux do
             on_arm do
-              url "https://github.com/adammharris/colophon/releases/download/v$version/colophon-linux-aarch64.tar.gz"
+              url "https://github.com/adammharris/prov/releases/download/v$version/prov-linux-aarch64.tar.gz"
               sha256 "$linux_arm64_sha"
             end
             on_intel do
-              url "https://github.com/adammharris/colophon/releases/download/v$version/colophon-linux-x86_64.tar.gz"
+              url "https://github.com/adammharris/prov/releases/download/v$version/prov-linux-x86_64.tar.gz"
               sha256 "$linux_x64_sha"
             end
           end
 
           def install
-            bin.install "colophon"
+            bin.install "prov"
           end
 
           test do
-            assert_match version.to_s, shell_output("#{bin}/colophon --version")
+            assert_match version.to_s, shell_output("#{bin}/prov --version")
           end
         end
         RUBY
@@ -134,14 +134,14 @@ jobs:
       env: { COMMITTER_TOKEN: '${{ secrets.HOMEBREW_TAP_TOKEN }}' }
       run: |
         git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/adammharris/homebrew-tap" tap
-        cp /tmp/colophon.rb tap/Formula/colophon.rb
+        cp /tmp/prov.rb tap/Formula/prov.rb
         cd tap
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add Formula/colophon.rb
+        git add Formula/prov.rb
         if git diff --cached --quiet; then
           echo "Formula unchanged — skipping commit"
         else
-          git commit -m "colophon ${GITHUB_REF_NAME#v}"
+          git commit -m "prov ${GITHUB_REF_NAME#v}"
           git push
         fi

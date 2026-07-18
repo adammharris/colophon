@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["colophon", "colophon-cli"]
+members = ["prov", "prov-cli"]
 
 [workspace.package]
 version = "0.2.1"
@@ -9,33 +9,33 @@ edition = "2024"
 # `if let … && let …` let-chains in stable positions, stabilized in 1.88 — so 1.88
 # is the true floor, enforced by the `msrv` CI job (which reads this very value).
 rust-version = "1.88"
-repository = "https://github.com/adammharris/colophon"
-homepage = "https://github.com/adammharris/colophon"
+repository = "https://github.com/adammharris/prov"
+homepage = "https://github.com/adammharris/prov"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Embedded-metadata backend. fig is a Zig-backed parser/editor (its build.rs
-# runs `zig build`). The value tree is colophon's common currency.
+# runs `zig build`). The value tree is prov's common currency.
 #
 # Only the format-agnostic infrastructure is enabled here (serde/derive/indexmap).
-# The per-format parser backends (yaml/json/fig) are pulled in *by colophon's own
-# features* — see `colophon/Cargo.toml` `[features]`, which forwards `yaml` →
+# The per-format parser backends (yaml/json/fig) are pulled in *by prov's own
+# features* — see `prov/Cargo.toml` `[features]`, which forwards `yaml` →
 # `fig/yaml`, etc. This lets a downstream user compile out the formats they don't
 # use (each unused format is a Zig parser/printer left out of `libfig.a`).
 fig = { version = "2.5.0", default-features = false, features = ["serde", "derive", "indexmap"] }
 indexmap = { version = "2.0", features = ["serde"] }
 thiserror = "2.0"
 
-# Body-prose parsing (Djot/Markdown) — colophon's body-parser dependency (see
+# Body-prose parsing (Djot/Markdown) — prov's body-parser dependency (see
 # `src/content.rs`).
 twig-doc = { version = "2.1.0" }
 
 # Opaque document-ID minting: betanumeric alphabet + NOID-style check character
-# over a seeded PRNG. Colophon supplies its own seed (uniqueness is enforced by
+# over a seeded PRNG. Prov supplies its own seed (uniqueness is enforced by
 # rejection against the index, not entropy), so the dependency-free default —
-# no `os`/`js` features — is all it needs. See `colophon/src/identity.rs`.
+# no `os`/`js` features — is all it needs. See `prov/src/identity.rs`.
 moid = "0.1.1"
 
 # Internal crate.
-colophon = { path = "colophon", version = "0.2.1" }
+prov = { path = "prov", version = "0.2.1" }

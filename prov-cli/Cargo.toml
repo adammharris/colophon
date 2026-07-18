@@ -1,0 +1,37 @@
+[package]
+name = "prov-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+description = "Command-line companion for the prov self-describing workspace library."
+keywords = ["markdown", "frontmatter", "workspace", "cli"]
+categories = ["command-line-utilities"]
+# Not published yet — dogfooded alongside the library.
+publish = false
+
+# The crate is `prov-cli`; the installed command is `prov`.
+[[bin]]
+name = "prov"
+path = "src/main.rs"
+
+[dependencies]
+# The library. Inherited plainly, so prov's own default feature (`yaml`) is
+# always on — YAML is a hard baseline for the CLI, which seeds `registry.yaml`
+# and falls back to `---` frontmatter. The other formats are additive and
+# forwarded through this crate's features below.
+prov.workspace = true
+# Arg parsing.
+clap = { version = "4.5", features = ["derive"] }
+cliclack = "0.5.5"
+
+[features]
+# JSON and the native fig dialect ship in the default binary, but a downstream
+# build can drop either with `--no-default-features` to shrink `libfig.a`. The
+# `--format` flag only offers the formats compiled in (see `MetaFormat`).
+default = ["json", "toml", "fig-lang"]
+json = ["prov/json"]
+toml = ["prov/toml"]
+fig-lang = ["prov/fig-lang"]

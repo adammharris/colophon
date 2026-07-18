@@ -1,5 +1,5 @@
 ```fig
-part_of = [colophon](/README.md)
+part_of = [prov](/README.md)
 ```
 # Config vocabulary — the reshaped spec
 
@@ -13,26 +13,26 @@ part_of = [colophon](/README.md)
 Workspace policy is a single namespace of keys that can live in either of two
 places — the same keys, the same values:
 
-- **Root document frontmatter**, nested under a `colophon:` key. The root mixes
+- **Root document frontmatter**, nested under a `prov:` key. The root mixes
   structural links, identity, and user-owned fields; nesting policy under one key
   keeps it apart, so it is unambiguous to read *and* to lint. This is the
   **description** home — how the workspace is written.
-- **The dedicated config document** (`colophon.<ext>`, the `config`-relation
+- **The dedicated config document** (`prov.<ext>`, the `config`-relation
   target), where keys sit at **top level** (the whole document is policy, so no
-  wrapper is needed). This is the **policy** home — how colophon behaves.
+  wrapper is needed). This is the **policy** home — how prov behaves.
 
 This mirrors the `.prettierrc` / `package.json` `"prettier"` duality: a tool's
 config sits bare in its own file and namespaced in a shared one. Precedence, both
 applied over the defaults:
 
 ```
-default  <  root `colophon:` block  <  config document (top-level)
+default  <  root `prov:` block  <  config document (top-level)
 ```
 
 The split of *which* axes live *where* is a **convention** `init` authors, not a
 mechanism — both homes accept the whole vocabulary, and the config document wins
 on any overlap. A minimal hand-authored vault can therefore put a policy key in
-the root `colophon:` block and never create a config document.
+the root `prov:` block and never create a config document.
 
 ### Pointers stay top-level
 
@@ -41,17 +41,17 @@ policy — they are structural links the root declares so the workspace unfolds
 from its own root (DESIGN §6). They remain at the root's top level alongside
 `part_of`/`contents`, resolved by the same link machinery. This also resolves the
 `recycle_bin` name clash by location: the top-level `recycle_bin` is a *pointer*
-(a path to the bin index); the `colophon:`-block `recycle_bin` is a *policy* (a
+(a path to the bin index); the `prov:`-block `recycle_bin` is a *policy* (a
 bool).
 
 ```yaml
 title: My Vault
 author: adammharris
-config: colophon.yaml             # pointer (structure) — top level
+config: prov.yaml             # pointer (structure) — top level
 registry: registry.yaml           # pointer — top level
 recycle_bin: recyclebin/index.md  # pointer (a path) — top level
-tags: [personal]                  # user field — colophon never reads it
-colophon:                         # policy namespace (description home)
+tags: [personal]                  # user field — prov never reads it
+prov:                         # policy namespace (description home)
   spec: 1
   content_format: djot
   references:
@@ -62,7 +62,7 @@ colophon:                         # policy namespace (description home)
 ## The vocabulary
 
 ```yaml
-colophon:
+prov:
   spec: 1                     # vocabulary version marker (integer)
 
   # ── description: how the workspace is written ──
@@ -81,7 +81,7 @@ colophon:
   id_storage: both            # registry | frontmatter | both
   updated: modified           # name of the machine-maintained timestamp field (omit/"" = off)
 
-  # ── policy: how colophon behaves (conventionally in colophon.yaml) ──
+  # ── policy: how prov behaves (conventionally in prov.yaml) ──
   identity: lazy              # none (a.k.a. off) | lazy | eager
   fixity: all                # off | attachments | all
   recycle_bin: true          # bool — route delete to the recoverable bin
@@ -138,8 +138,8 @@ applies to path targets only.
 
 ## Linting (`check`)
 
-`config::diagnose` runs over both surfaces — the root's `colophon:` block and the
-config document — reporting a `Finding::ConfigIssue` per key colophon would
+`config::diagnose` runs over both surfaces — the root's `prov:` block and the
+config document — reporting a `Finding::ConfigIssue` per key prov would
 silently ignore:
 
 - **Invalid value** on a recognized axis (e.g. `fixity: alll`) — keeps the
@@ -150,25 +150,25 @@ silently ignore:
   `relations` entry), where every key is expected to be a known axis.
 - `spec`, and the config document's own `title`/`part_of`, are whitelisted.
 
-`colophon config <key> <value>` runs the same `diagnose` over a one-key probe and
+`prov config <key> <value>` runs the same `diagnose` over a one-key probe and
 **refuses to write** a setting `check` would flag. Dotted keys address nested
-axes: `colophon config references.notation wikilink`.
+axes: `prov config references.notation wikilink`.
 
 Legacy top-level policy keys in the root (a diaryx-style `link_format: …` sitting
-outside the `colophon:` block) are **silently ignored** — treated as ordinary
+outside the `prov:` block) are **silently ignored** — treated as ordinary
 user fields, not read and not flagged.
 
 Beyond `check`, any command that opens the workspace prints a one-line stderr
 reminder when config would go unread — the `diagnose` issue count (with the first
 key as a teaser), and a note if a surface declares a `spec` newer than
-`SPEC_VERSION`. It is suppressed by `COLOPHON_QUIET`, and skipped on `check` and
+`SPEC_VERSION`. It is suppressed by `PROV_QUIET`, and skipped on `check` and
 `config` (which report config in full themselves).
 
 ## Making config explicit
 
 Because every axis has a default, a workspace need not spell config out. For
-authors who prefer nothing implicit, `colophon config --setup` materializes the
-full effective config into the config document (bootstrapping `colophon.yaml` if
+authors who prefer nothing implicit, `prov config --setup` materializes the
+full effective config into the config document (bootstrapping `prov.yaml` if
 none is linked): it preserves the document's own fields and every setting already
 present, and fills in the rest at their default. The layout is canonicalized
 (comments in the config document are not preserved).

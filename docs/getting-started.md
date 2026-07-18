@@ -1,15 +1,15 @@
 ```fig
-title = Getting Started with colophon
-part_of = [colophon](/README.md)
+title = Getting Started with prov
+part_of = [prov](/README.md)
 ```
 
-# Getting Started with colophon
+# Getting Started with prov
 
-A beginner's guide to the `colophon` command line. By the end you'll have a small
+A beginner's guide to the `prov` command line. By the end you'll have a small
 workspace, understand how its structure is stored, and know every command you
 need for day-to-day use.
 
-> **What colophon is, in one sentence.** A *self-describing plaintext
+> **What prov is, in one sentence.** A *self-describing plaintext
 > workspace*: a set of documents whose structure lives in the documents' own
 > frontmatter, not in the folder layout or an app-private sidecar. Follow the
 > links from a root document and the whole workspace unfolds. See
@@ -42,7 +42,7 @@ Three ideas carry everything else.
   Body prose goes here.
   ```
 
-- **Relations** are the named links in that metadata. colophon ships with the
+- **Relations** are the named links in that metadata. prov ships with the
   *diaryx* vocabulary:
 
   | Relation   | Direction        | Meaning                                    |
@@ -59,7 +59,7 @@ Three ideas carry everything else.
   relation (like `links`) may be many-to-many, laid over the tree as a graph.
 
 The root is just a document that nothing contains — it has no `part_of`.
-colophon finds it by walking up from your current directory until it sees a
+prov finds it by walking up from your current directory until it sees a
 document with metadata and no `part_of` (an `index.md` or `README.md` wins
 ties).
 
@@ -67,21 +67,21 @@ ties).
 
 ## 2. Install
 
-colophon builds from source and needs two toolchains:
+prov builds from source and needs two toolchains:
 
-- **Rust** (`cargo`, 1.85 or newer) — to build colophon itself.
-- **Zig** (0.16.0) — colophon's metadata parser (`fig`) and body parser
+- **Rust** (`cargo`, 1.85 or newer) — to build prov itself.
+- **Zig** (0.16.0) — prov's metadata parser (`fig`) and body parser
   (`twig-doc`) are Zig-backed and compile during the build. Both are ordinary
-  crates.io dependencies, so there is nothing to clone alongside colophon.
+  crates.io dependencies, so there is nothing to clone alongside prov.
 
 ```console
-$ git clone https://github.com/adammharris/colophon
-$ cd colophon
+$ git clone https://github.com/adammharris/prov
+$ cd prov
 $ cargo build --release
 ```
 
-The binary lands at `target/release/colophon`. Put it on your `PATH`, or invoke
-it by full path. Every example below uses the command name `colophon`.
+The binary lands at `target/release/prov`. Put it on your `PATH`, or invoke
+it by full path. Every example below uses the command name `prov`.
 
 ---
 
@@ -92,8 +92,8 @@ document that records your preferences. On a terminal it walks you through a
 series of choices:
 
 ```console
-$ colophon init my-vault
-┌  colophon init
+$ prov init my-vault
+┌  prov init
 │
 ◇  Title ················ My Vault
 ◇  Author ··············· (blank)
@@ -115,11 +115,11 @@ Each prompt has a flag, so you can skip the interview entirely. Pass `--yes`
 
 <!-- exec -->
 ```console
-$ colophon init my-vault --yes
+$ prov init my-vault --yes
 initialized /home/you/my-vault
   root: index.md — My Vault
-  config: colophon.yaml — content markdown, embed delimited (character delimiters), language yaml, identity lazy, references path, markdown notation, root paths, id storage both, recycle bin, fixity attachments
-next: colophon new <title> --in index.md
+  config: prov.yaml — content markdown, embed delimited (character delimiters), language yaml, identity lazy, references path, markdown notation, root paths, id storage both, recycle bin, fixity attachments
+next: prov new <title> --in index.md
 ```
 
 The prompts, in the order they're asked:
@@ -139,7 +139,7 @@ The prompts, in the order they're asked:
 | **Content checksums**         | `--fixity`     | `payloads`                    | `off`, `payloads` (attachments), `full` (also bodies)         |
 
 The root-shaping choices come first; the rest are **workspace preferences**, all
-written into a config document (`colophon.yaml`, linked from the root) so the
+written into a config document (`prov.yaml`, linked from the root) so the
 workspace records how it wants to be authored — see [§10](#10-workspace-config).
 The **content format** sets the root file's extension and body grammar. The
 **embed type** picks the carrier the config language is written in — frontmatter
@@ -150,11 +150,11 @@ Setting some flags and being prompted for the rest works too. `--reference id`
 needs identity, so it's rejected with `--identity off`:
 
 ```console
-$ colophon init my-vault --content djot --reference id --yes
+$ prov init my-vault --content djot --reference id --yes
 initialized /home/you/my-vault
   root: index.dj — My Vault
-  config: colophon.yaml — content djot, embed code_block (typed code block), language yaml, identity lazy, references id, id storage both, recycle bin, fixity attachments
-next: colophon new <title> --in index.dj
+  config: prov.yaml — content djot, embed code_block (typed code block), language yaml, identity lazy, references id, id storage both, recycle bin, fixity attachments
+next: prov new <title> --in index.dj
 ```
 
 With no directory argument, `init` initializes the current directory. It refuses
@@ -167,7 +167,7 @@ $ cd my-vault
 $ cat index.md
 ---
 title: My Vault
-config: colophon.yaml
+config: prov.yaml
 ---
 
 # My Vault
@@ -185,9 +185,9 @@ back.
 
 <!-- exec -->
 ```console
-$ colophon new "Rust" --in index.md
+$ prov new "Rust" --in index.md
 created rust.md (in index.md)
-$ colophon new "Zig" --in index.md
+$ prov new "Zig" --in index.md
 created zig.md (in index.md)
 ```
 
@@ -199,7 +199,7 @@ extension with `--ext`. Look at what `new` wrote:
 $ cat index.md
 ---
 title: My Vault
-config: colophon.yaml
+config: prov.yaml
 contents:
 - '[Rust](/rust.md)'
 - '[Zig](/zig.md)'
@@ -226,7 +226,7 @@ root:
 
 <!-- exec -->
 ```console
-$ colophon tree
+$ prov tree
 index.md — My Vault
 ├── rust.md — Rust
 └── zig.md — Zig
@@ -237,29 +237,29 @@ links:
 
 <!-- exec -->
 ```console
-$ colophon show index.md
+$ prov show index.md
 index.md
   title: My Vault
   contents (2 children):
     - [Rust](/rust.md)
     - [Zig](/zig.md)
   config:
-    - colophon.yaml
+    - prov.yaml
 ```
 
 More single-document readers:
 
 | Command                    | Prints                                             |
 | -------------------------- | -------------------------------------------------- |
-| `colophon meta FILE`       | the raw metadata block (no fences)                 |
-| `colophon get FILE KEY`    | one field by dotted path (`title`, `contents.0`)   |
-| `colophon links FILE`      | every link as `relation⇥target`                    |
-| `colophon body FILE`       | everything *outside* the metadata block            |
-| `colophon backlinks FILE`  | who links *to* this document, across the workspace |
+| `prov meta FILE`       | the raw metadata block (no fences)                 |
+| `prov get FILE KEY`    | one field by dotted path (`title`, `contents.0`)   |
+| `prov links FILE`      | every link as `relation⇥target`                    |
+| `prov body FILE`       | everything *outside* the metadata block            |
+| `prov backlinks FILE`  | who links *to* this document, across the workspace |
 
 <!-- exec -->
 ```console
-$ colophon backlinks index.md
+$ prov backlinks index.md
 rust.md	part_of	path
 zig.md	part_of	path
 ```
@@ -274,10 +274,10 @@ none.
 
 <!-- exec -->
 ```console
-$ colophon set rust.md summary "Notes on the Rust language"
-$ colophon get rust.md summary
+$ prov set rust.md summary "Notes on the Rust language"
+$ prov get rust.md summary
 Notes on the Rust language
-$ colophon unset rust.md summary
+$ prov unset rust.md summary
 ```
 
 Values are typed by inference: `true`/`false`, integers, floats, and `null`
@@ -286,14 +286,14 @@ fields and sequence indices (`contents.0`).
 
 ### Body prose and `render`
 
-The *body* is everything after the frontmatter. colophon can render a
+The *body* is everything after the frontmatter. prov can render a
 Markdown/Djot body to HTML, and it understands code — a `[[…]]` inside a code
 span is treated as code, never as a link:
 
 <!-- exec -->
 ```console
 $ printf '\n# Rust\n\nInline `let x = [[1,2],[3,4]];` is code, not a link.\n' >> rust.md
-$ colophon render rust.md
+$ prov render rust.md
 <h1>Rust</h1>
 <p>Inline <code>let x = [[1,2],[3,4]];</code> is code, not a link.</p>
 ```
@@ -305,29 +305,29 @@ $ colophon render rust.md
 
 ## 7. Restructure safely: `mv` and `rm`
 
-This is colophon's payoff. `mv` moves a file **and rewrites every link that
+This is prov's payoff. `mv` moves a file **and rewrites every link that
 pointed at it** — the parent's `contents` entry, the moved file's own relative
 links, overlay links, and body wikilinks across the whole workspace.
 
 <!-- exec -->
 ```console
-$ colophon mv rust.md rust-lang.md
+$ prov mv rust.md rust-lang.md
 moved rust.md -> rust-lang.md
-$ colophon tree
+$ prov tree
 index.md — My Vault
 ├── rust-lang.md — Rust
 └── zig.md — Zig
 ```
 
 `rm` removes a document's parent entry and, by default, moves the file to the
-workspace **recycle bin** (recoverable with `colophon restore`). Pass `--purge`
+workspace **recycle bin** (recoverable with `prov restore`). Pass `--purge`
 for an immediate hard delete. It refuses to orphan children unless you pass
 `--force`, and warns about any links left dangling:
 
 <!-- exec -->
 ```console
-$ colophon rm zig.md
-moved zig.md to the recycle bin (restore with `colophon restore`)
+$ prov rm zig.md
+moved zig.md to the recycle bin (restore with `prov restore`)
 ```
 
 ---
@@ -341,7 +341,7 @@ finds anything, so it fits in CI. Right now the workspace is consistent:
 
 <!-- exec -->
 ```console
-$ colophon check
+$ prov check
 ok: no findings
 ```
 
@@ -352,11 +352,11 @@ that merely looks like a link is never "repaired":
 
 <!-- exec allow-fail -->
 ```console
-$ colophon unset rust-lang.md part_of
-$ colophon check
+$ prov unset rust-lang.md part_of
+$ prov check
 index.md: child rust-lang.md does not declare part_of back to it
 1 finding(s)
-$ printf 'y\n' | colophon check --fix
+$ printf 'y\n' | prov check --fix
 ⚑  index.md: child rust-lang.md does not declare part_of back to it
    → declare part_of → index.md in rust-lang.md
    apply? [y]es / [n]o / [a]ll / [q]uit: applied 1 fix(es); 0 finding(s) need attention
@@ -364,7 +364,7 @@ $ printf 'y\n' | colophon check --fix
 
 <!-- exec -->
 ```console
-$ colophon check
+$ prov check
 ok: no findings
 ```
 
@@ -377,7 +377,7 @@ wikilink like `[[index.md]]` resolves **relative to the file it's in** — from
 
 ## 9. Stable IDs (optional)
 
-Paths change; sometimes you want a link that *doesn't* break on a move. colophon
+Paths change; sometimes you want a link that *doesn't* break on a move. prov
 can mint a stable ID for a document and resolve it back to a path — the "the app
 owns your links" trick, except the identity data is a plain file in your own tree.
 
@@ -387,7 +387,7 @@ Two independent settings control this (§10):
   `lazy` (on a link-by-id or publish — the recommended default), or `eager`
   (every document at creation).
 - **`references.target`** — *what a reference addresses*: `path`, `id`, or
-  `alias`. Set it to `id` and colophon authors structural links *by ID*, so a
+  `alias`. Set it to `id` and prov authors structural links *by ID*, so a
   move rewrites no links at all (the registry tracks the new path). Only
   meaningful when `identity` isn't off. The `init` **References between
   documents** prompt sets this.
@@ -397,9 +397,9 @@ mint an ID on demand and paste a durable reference by hand:
 
 <!-- exec -->
 ```console
-$ colophon config identity lazy
-set identity = lazy in colophon.yaml
-$ colophon id rust-lang.md
+$ prov config identity lazy
+set identity = lazy in prov.yaml
+$ prov id rust-lang.md
 initialized registry.yaml (linked from index.md)
 id:s5jpwxz
 ```
@@ -408,10 +408,10 @@ The ID survives a move — the registry follows the file:
 
 <!-- exec -->
 ```console
-$ id=$(colophon id rust-lang.md)
-$ colophon mv rust-lang.md notes/rust.md
+$ id=$(prov id rust-lang.md)
+$ prov mv rust-lang.md notes/rust.md
 moved rust-lang.md -> notes/rust.md
-$ colophon resolve "$id"
+$ prov resolve "$id"
 notes/rust.md
 ```
 
@@ -423,7 +423,7 @@ dotfolder. IDs are written `id:<id>`; deleting a document *tombstones* its ID (i
 stops resolving but is never reissued), so a stale `id:` reference stays
 diagnosable.
 
-With `identity: off`, `colophon id` politely refuses — there is nothing to mint.
+With `identity: off`, `prov id` politely refuses — there is nothing to mint.
 
 ---
 
@@ -431,15 +431,15 @@ With `identity: off`, `colophon id` politely refuses — there is nothing to min
 
 Settings live in a config document linked from the root via the `config`
 relation — same reachability move as the registry. `init` writes this document
-(`colophon.yaml`) with the preferences you chose; afterwards `colophon config`
+(`prov.yaml`) with the preferences you chose; afterwards `prov config`
 reads and writes it. Keys are grouped into a small nested vocabulary
 (`docs/config-vocab.md`); a policy setting can also live in the root's
-`colophon:` frontmatter block. `colophon check` flags any key colophon would
+`prov:` frontmatter block. `prov check` flags any key prov would
 silently ignore (a typo, or an unrecognized value).
 
 <!-- exec -->
 ```console
-$ colophon config
+$ prov config
 spec: 1
 content_format: markdown
 metadata:
@@ -455,8 +455,8 @@ updated: ''
 identity: lazy
 fixity: attachments
 recycle_bin: true
-$ colophon config references.target id
-set references.target = id in colophon.yaml
+$ prov config references.target id
+set references.target = id in prov.yaml
 ```
 
 The knobs (dotted keys address nested axes):
@@ -483,21 +483,21 @@ rewrites nothing — the registry does the work.
 
 **Making config explicit.** Every key has a default, so a workspace with a
 minimal (or no) config document still runs — it just relies on those defaults. If
-you would rather see and edit every setting, `colophon config --setup` writes the
-full effective config into `colophon.yaml` (creating and linking it if needed),
+you would rather see and edit every setting, `prov config --setup` writes the
+full effective config into `prov.yaml` (creating and linking it if needed),
 filling in the keys you have not set while preserving the ones you have:
 
 <!-- exec -->
 ```console
-$ colophon config --setup
-wrote 9 explicit setting(s) to colophon.yaml
+$ prov config --setup
+wrote 9 explicit setting(s) to prov.yaml
 ```
 
-**Config that won't take effect.** colophon reads config back by exact key and
+**Config that won't take effect.** prov reads config back by exact key and
 value, so a misspelled key or an unrecognized value is silently ignored (the
-default stands). `colophon check` reports each one; and any command that opens the
+default stands). `prov check` reports each one; and any command that opens the
 workspace prints a one-line reminder if your config has such a setting — or a
-`spec` newer than your colophon understands. Set `COLOPHON_QUIET=1` to silence
+`spec` newer than your prov understands. Set `PROV_QUIET=1` to silence
 these reminders.
 
 ---
@@ -527,20 +527,20 @@ these reminders.
 | `backlinks FILE`                | list inbound links                                       |
 | `config [KEY [VALUE]]`          | read/write workspace settings                            |
 
-Run `colophon <command> --help` for the full options of any command.
+Run `prov <command> --help` for the full options of any command.
 
 ---
 
 ## Known limitations
 
-colophon is young. Things a beginner will hit:
+prov is young. Things a beginner will hit:
 
 - **`mv` doesn't yet honor the reference style.** A move currently rewrites the
   parent's link as a *relative* path even when your `references.path_style` is
   `root`. The link still resolves; only its style changes. (`new` and
   `check --fix` do respect the style.)
 - **The root must be unambiguous.** If a directory has two documents with
-  metadata and no `part_of`, colophon can't tell which is the root and reports
+  metadata and no `part_of`, prov can't tell which is the root and reports
   an ambiguity. Keep a single root per workspace (name it `index.md`).
 - **One vocabulary for now.** The CLI uses the built-in diaryx relation set
   (`contents`/`part_of`/`links`/…). Custom vocabularies exist in the library but

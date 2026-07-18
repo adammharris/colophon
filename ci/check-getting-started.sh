@@ -16,33 +16,33 @@
 # so matching them verbatim would be noise). A `$` command that exits non-zero in
 # a strict block fails the run and prints the offending command.
 #
-# The `colophon` name in the transcript resolves to the built binary (below), and
-# COLOPHON_QUIET silences the config-advisory line so it can't interleave with
+# The `prov` name in the transcript resolves to the built binary (below), and
+# PROV_QUIET silences the config-advisory line so it can't interleave with
 # asserted output.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUIDE="$ROOT/docs/getting-started.md"
 
-# Locate the binary: an explicit COLOPHON_BIN wins; otherwise prefer a release
+# Locate the binary: an explicit PROV_BIN wins; otherwise prefer a release
 # build, then a debug build, then build a debug one on the spot.
-if [[ -n "${COLOPHON_BIN:-}" ]]; then
-  BIN="$COLOPHON_BIN"
-elif [[ -x "$ROOT/target/release/colophon" ]]; then
-  BIN="$ROOT/target/release/colophon"
-elif [[ -x "$ROOT/target/debug/colophon" ]]; then
-  BIN="$ROOT/target/debug/colophon"
+if [[ -n "${PROV_BIN:-}" ]]; then
+  BIN="$PROV_BIN"
+elif [[ -x "$ROOT/target/release/prov" ]]; then
+  BIN="$ROOT/target/release/prov"
+elif [[ -x "$ROOT/target/debug/prov" ]]; then
+  BIN="$ROOT/target/debug/prov"
 else
-  echo "building colophon (debug) ..."
-  ( cd "$ROOT" && cargo build -p colophon-cli ) || exit 1
-  BIN="$ROOT/target/debug/colophon"
+  echo "building prov (debug) ..."
+  ( cd "$ROOT" && cargo build -p prov-cli ) || exit 1
+  BIN="$ROOT/target/debug/prov"
 fi
 echo "using binary: $BIN"
 
-# The transcript writes `colophon ...`; route it to the built binary. Defined as
-# a function so command substitution (`$(colophon id …)`) inherits it too.
-colophon() { "$BIN" "$@"; }
-export COLOPHON_QUIET=1
+# The transcript writes `prov ...`; route it to the built binary. Defined as
+# a function so command substitution (`$(prov id …)`) inherits it too.
+prov() { "$BIN" "$@"; }
+export PROV_QUIET=1
 
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
