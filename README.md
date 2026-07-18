@@ -2,7 +2,23 @@
 title = colophon
 author = adammharris
 created = 2026-07-06
-contents = [[Design](docs/DESIGN.md), [Getting Started](docs/getting-started.md)]
+contents = [[Design](docs/DESIGN.md), [Getting Started](docs/getting-started.md), [Config Vocab](/docs/config-vocab.md), [Init Adoption](/docs/init-adoption.md), [Next Steps](/docs/next-steps.md), [Reference Styles](/docs/reference-styles.md)]
+colophon
+> spec = 1
+> content_format = markdown
+> metadata
+> > format = fig
+> > embed = delimited
+> references
+> > notation = markdown
+> > path_style = root
+> > target = path
+> > label = false
+> id_storage = both
+> updated = ''
+> identity = lazy
+> fixity = attachments
+> recycle_bin = true
 ```
 
 # colophon
