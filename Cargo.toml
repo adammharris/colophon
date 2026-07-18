@@ -3,7 +3,7 @@ resolver = "2"
 members = ["colophon", "colophon-cli"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 # Minimum supported Rust version. Edition 2024 needs 1.85, but the crate also uses
 # `if let … && let …` let-chains in stable positions, stabilized in 1.88 — so 1.88
@@ -35,7 +35,7 @@ twig-doc = { version = "2.1.0" }
 # over a seeded PRNG. Colophon supplies its own seed (uniqueness is enforced by
 # rejection against the index, not entropy), so the dependency-free default —
 # no `os`/`js` features — is all it needs. See `colophon/src/identity.rs`.
-moid = "0.1.0"
+moid = "0.1.1"
 
 # Internal crate.
-colophon = { path = "colophon", version = "0.2.0" }
+colophon = { path = "colophon", version = "0.2.1" }
