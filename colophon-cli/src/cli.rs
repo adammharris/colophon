@@ -418,21 +418,25 @@ pub(crate) enum Command {
     /// Permanently purge every document in the recycle bin. Irreversible; the
     /// only hard delete of binned documents.
     EmptyBin,
-    /// Convert a document's own outbound path links to a different spelling.
-    /// Two axes are supported: `notation` (how a target is wrapped — `markdown`
-    /// `[Title](target)` or `bare` `target`) and `path_style` (how the path
-    /// itself is written — `root` / `relative` / `canonical`). Only the spelling
-    /// changes; each link's destination, label, and wrapper are preserved, and
-    /// id/external/alias targets are left untouched. Per file by default (DESIGN
-    /// §8) — links elsewhere pointing *at* this file are those documents' to
-    /// convert; `-r` also converts this file's spanning subtree.
+    /// Convert a document along a config axis, in place. Three axes are supported.
+    /// Two restyle the document's own outbound path links: `notation` (how a
+    /// target is wrapped — `markdown` `[Title](target)` or `bare` `target`) and
+    /// `path_style` (how the path itself is written — `root` / `relative` /
+    /// `canonical`) — only the spelling changes; each link's destination, label,
+    /// and wrapper are preserved, and id/external/alias targets are left untouched.
+    /// The third, `metadata.format`, re-emits the document's frontmatter in a
+    /// different language (`yaml` / `json` / `toml` / `fig`), keeping its embedding
+    /// shape and every value (comments do not survive a cross-format rewrite).
+    /// Per file by default (DESIGN §8) — a document's spelling is its own to
+    /// declare; `-r` also converts this file's spanning subtree.
     Convert {
         /// The document to convert.
         #[arg(value_name = "TARGET")]
         file: String,
-        /// The config axis to convert: `notation` or `path_style`.
+        /// The config axis to convert: `notation`, `path_style`, or `metadata.format`.
         axis: String,
-        /// The target value (e.g. `bare` for `notation`, `relative` for `path_style`).
+        /// The target value (e.g. `bare` for `notation`, `relative` for
+        /// `path_style`, `json` for `metadata.format`).
         value: String,
         /// Also convert every document in this file's spanning subtree.
         #[arg(long, short)]

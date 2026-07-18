@@ -1524,6 +1524,106 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         Ok(changed)
     }
 
+    /// Convert the metadata block of the document at `file` to a different
+    /// frontmatter language — re-emitting its embedded metadata in `format` while
+    /// keeping the document's *embedding shape* (delimited frontmatter stays
+    /// delimited, a ```` ```lang ```` code block stays a code block, an HTML island
+    /// stays an island) and every value. Only the serialization changes; comments
+    /// do not survive a cross-format rewrite (a YAML comment has no JSON home).
+    ///
+    /// **Per-file by default (DESIGN §8),** like [`convert_link_style`](Self::convert_link_style):
+    /// a document's metadata format is its own to declare, so a workspace may hold
+    /// a mix. With `recursive`, every document in `file`'s spanning subtree is
+    /// converted. A document already in `format`, or one with no metadata block, is
+    /// left untouched; a *whole-file* (separate/config) document is not an embedded
+    /// block to re-fence — converting one would rename the file and re-point its
+    /// links — so it is an error to name one directly and is skipped under a
+    /// recursive sweep. Returns the number of documents actually rewritten.
+    pub async fn convert_meta_format(
+        &mut self,
+        file: &Path,
+        format: fig::Format,
+        recursive: bool,
+    ) -> Result<usize> {
+        let file = link::normalize(file);
+        if !self.fs().try_exists(&self.root().join(&file)).await? {
+            return Err(Error::NotFound(file.to_path_buf()));
+        }
+        let targets = if recursive {
+            self.spanning_subtree(&file).await?
+        } else {
+            vec![file.clone()]
+        };
+        // Staged as one change set for the whole subtree — a recursive convert is a
+        // single edit to the reader, atomic if any document fails to reformat. Each
+        // document is independent (nothing reads what another wrote), so the sweep
+        // stages cleanly. `named` gates whether an out-of-scope (whole-file)
+        // document is a hard error (the user pointed at it) or a skip (it merely
+        // fell inside the subtree).
+        let mut cs = self.change();
+        for path in &targets {
+            let named = path == &file;
+            if let Some(text) = self.reformat_document(path, format, named).await? {
+                cs.write(path, text);
+            }
+        }
+        let changed = cs.len();
+        self.commit(cs).await?;
+        Ok(changed)
+    }
+
+    /// Reformat the metadata block of the document at `path` to `format`, returning
+    /// its new text, or `None` when nothing should change (no metadata, already in
+    /// `format`, or an out-of-scope whole-file document under a recursive sweep).
+    /// `named` is true when the caller pointed at this document directly, so a
+    /// whole-file document is a hard error rather than a silent skip.
+    async fn reformat_document(
+        &self,
+        path: &Path,
+        format: fig::Format,
+        named: bool,
+    ) -> Result<Option<String>> {
+        let (_, doc) = self.load(path).await?;
+        let Some(mapping) = doc.meta.as_mapping() else {
+            return Ok(None); // no metadata block to convert
+        };
+        let kind = match doc.carrier {
+            Some(MetaCarrier::Fenced(kind)) => kind,
+            // The whole file *is* the metadata: converting its format renames the
+            // file and re-points every link at it — a move, not a re-fence, and out
+            // of this op's scope. An error when named directly; skipped in a sweep.
+            Some(MetaCarrier::WholeFile(_)) if named => {
+                return Err(Error::Structure(format!(
+                    "{}: whole-file (separate) metadata — its format is its file \
+                     extension; converting it is a move, not supported by `convert`",
+                    path.display()
+                )));
+            }
+            _ => return Ok(None),
+        };
+        if kind.inner_format() == format {
+            return Ok(None); // already in the target format
+        }
+        let style = crate::document::embed_style_of(kind);
+        let target = match crate::document::embed_carrier(style, format) {
+            Some(MetaCarrier::Fenced(target)) => target,
+            // The style can't hold this format — notably `delimited` + fig (the fig
+            // dialect has no `---`-style delimiter). A real "impossible as asked",
+            // so it errors (aborting a recursive sweep) rather than skipping.
+            _ => {
+                return Err(Error::Structure(format!(
+                    "{}: {} embedding has no {} form — convert `metadata.embed` first",
+                    path.display(),
+                    style.as_config_str(),
+                    crate::config::metadata_format_str(format),
+                )));
+            }
+        };
+        Ok(Some(crate::edit::reformat_block(
+            &doc.body, mapping, target,
+        )?))
+    }
+
     /// Restyle every path link the document at `path` declares — frontmatter
     /// relation entries then body links — returning its new text, or `None` when
     /// nothing changed (so a no-op restyle stages no write). The body is spliced
@@ -2994,6 +3094,110 @@ mod tests {
         // (No `check` here: `ajp7eqb` is a deliberately fake id, which `check`
         // would flag as malformed regardless of the conversion. The first
         // convert test validates a clean workspace after converting.)
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn convert_meta_format_reserializes_the_block_keeping_values_and_body() {
+        // A delimited YAML block becomes a delimited JSON block (`;;;`): every
+        // value and the prose body survive, only the frontmatter language changes,
+        // and the workspace still validates.
+        let dir = tempdir("convert-meta-json");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- '[Leaf](/leaf.md)'\n---\n# Root\n\nprose\n",
+        );
+        write(
+            &dir,
+            "leaf.md",
+            "---\ntitle: Leaf\npart_of: /index.md\n---\n",
+        );
+
+        let n =
+            block_on(ws(&dir).convert_meta_format(Path::new("index.md"), fig::Format::Json, false))
+                .unwrap();
+        assert_eq!(n, 1, "only the named file converted");
+
+        let out = read(&dir, "index.md");
+        assert!(out.starts_with(";;;\n"), "delimited JSON now: {out}");
+        assert!(out.contains("\"title\": \"Root\""), "{out}");
+        assert!(
+            out.contains("[Leaf](/leaf.md)"),
+            "link value preserved: {out}"
+        );
+        assert!(out.ends_with("# Root\n\nprose\n"), "body untouched: {out}");
+        // Per-file: the leaf stays YAML, and the mixed-format workspace is clean.
+        assert!(read(&dir, "leaf.md").starts_with("---\n"), "leaf untouched");
+        assert_eq!(block_on(ws(&dir).check("index.md")).unwrap(), vec![]);
+    }
+
+    // fig has no `---`-style delimiter, so a *delimited* block cannot become fig,
+    // but a *code-block* one can (```` ```fig ````): the embedding shape is kept.
+    #[cfg(feature = "fig-lang")]
+    #[test]
+    fn convert_meta_format_keeps_the_embedding_shape_and_rejects_impossible_pairs() {
+        let dir = tempdir("convert-meta-fig");
+        // A code-block YAML document converts cleanly to a ```` ```fig ```` block.
+        write(&dir, "code.md", "```yaml\ntitle: Root\n```\nbody\n");
+        let n =
+            block_on(ws(&dir).convert_meta_format(Path::new("code.md"), fig::Format::Fig, false))
+                .unwrap();
+        assert_eq!(n, 1);
+        let code = read(&dir, "code.md");
+        assert!(code.starts_with("```fig\n"), "code block kept: {code}");
+        assert!(code.contains("title = Root"), "fig dialect: {code}");
+        assert!(code.ends_with("body\n"), "body untouched: {code}");
+
+        // A delimited (`---`) block has no fig form — a hard error, not a silent skip.
+        write(&dir, "delim.md", "---\ntitle: Root\n---\nbody\n");
+        let err =
+            block_on(ws(&dir).convert_meta_format(Path::new("delim.md"), fig::Format::Fig, false))
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("no fig form"),
+            "clear diagnostic: {err}"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn convert_meta_format_recursive_skips_no_ops_and_out_of_scope_documents() {
+        // A recursive convert sweeps the spanning subtree. A document already in
+        // the target format is a no-op; a whole-file (config) document is not a
+        // fenced block and is skipped when merely swept — while naming one directly
+        // is an error.
+        let dir = tempdir("convert-meta-recursive");
+        write(
+            &dir,
+            "index.md",
+            "---\ntitle: Root\ncontents:\n- a.md\n---\n",
+        );
+        // `a.md` is already JSON, so the sweep leaves it untouched (a no-op).
+        write(
+            &dir,
+            "a.md",
+            ";;;\n{\"title\": \"A\", \"part_of\": \"index.md\"}\n;;;\n",
+        );
+
+        let n =
+            block_on(ws(&dir).convert_meta_format(Path::new("index.md"), fig::Format::Json, true))
+                .unwrap();
+        assert_eq!(
+            n, 1,
+            "only the root actually changed (a.md was already JSON)"
+        );
+        assert!(read(&dir, "index.md").starts_with(";;;\n"));
+
+        // Naming a whole-file config document directly is refused.
+        write(&dir, "conf.yaml", "title: Config\n");
+        let err = block_on(ws(&dir).convert_meta_format(
+            Path::new("conf.yaml"),
+            fig::Format::Json,
+            false,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("whole-file"), "{err}");
     }
 
     #[test]

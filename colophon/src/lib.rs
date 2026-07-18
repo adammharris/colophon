@@ -74,12 +74,14 @@ pub mod workspace;
 pub use change::{ChangeSet, FileOp};
 pub use config::{
     ConfigIssue, ConfigIssueKind, Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig,
-    diagnose, spec_ahead,
+    diagnose, metadata_format_from_str, metadata_format_str, spec_ahead,
 };
 pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
 pub use discovery::{Discovered, Discovery, discover};
-pub use document::{Document, EmbedStyle, EmbedType, embed_carrier, is_opaque_payload};
+pub use document::{
+    Document, EmbedStyle, EmbedType, embed_carrier, embed_style_of, is_opaque_payload,
+};
 pub use error::{Error, Result};
 pub use exec::block_on;
 pub use fig::Format;

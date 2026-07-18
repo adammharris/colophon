@@ -875,6 +875,20 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// Parse a `metadata.format` config value (`yaml`/`json`/`toml`/`fig`) into a
+/// metadata [`fig::Format`], honoring the compiled-in formats — the public form of
+/// [`format_from_str`], for callers that name a frontmatter language from outside
+/// the config parser (the CLI's `convert … metadata.format …`).
+pub fn metadata_format_from_str(value: &str) -> Option<fig::Format> {
+    format_from_str(value)
+}
+
+/// The `metadata.format` config spelling for a metadata [`fig::Format`] — the
+/// public form of [`format_str`], and the inverse of [`metadata_format_from_str`].
+pub fn metadata_format_str(format: fig::Format) -> &'static str {
+    format_str(format)
+}
+
 /// Parse the `metadata.format` config value into a metadata format (only the
 /// compiled-in formats are recognized; others → `None`, keeping the default).
 fn format_from_str(value: &str) -> Option<fig::Format> {

@@ -1576,9 +1576,18 @@ fn cmd_convert(file: &Path, axis: &str, value: &str, recursive: bool) -> CmdResu
             persist(&ctx, &mut ws)?;
             println!("converted {n} document(s) to {value} notation");
         }
+        "metadata.format" | "metadata_format" | "format" => {
+            let fmt = colophon::metadata_format_from_str(value).ok_or_else(|| {
+                format!("unknown metadata.format `{value}` (expected yaml|json|toml|fig)")
+            })?;
+            let n = block_on(ws.convert_meta_format(&ws_rel(&ctx, file)?, fmt, recursive))?;
+            persist(&ctx, &mut ws)?;
+            println!("converted {n} document(s) to {value} frontmatter");
+        }
         other => {
             return Err(format!(
-                "convert: axis `{other}` is not supported (only `notation` and `path_style`)"
+                "convert: axis `{other}` is not supported \
+                 (only `notation`, `path_style`, and `metadata.format`)"
             )
             .into());
         }

@@ -14,6 +14,7 @@ use fig::{Embed, EmbedType, Segment};
 
 use crate::document::MetaCarrier;
 use crate::error::{Error, Result};
+use crate::meta::Mapping;
 
 /// The frontmatter archetype used to synthesize a metadata block for a document
 /// that has none. YAML (`---`) is the convention when compiled in; otherwise the
@@ -179,6 +180,34 @@ pub fn unset_in_text(text: &str, carrier: Option<MetaCarrier>, dotted: &str) -> 
     let mut editor = MetaEditor::open(text, carrier)?;
     editor.delete(&key_path(dotted))?;
     editor.render()
+}
+
+/// Re-emit `mapping` as a fresh metadata block of archetype `target`, prepended
+/// to (or appended after, for endmatter) the plain `body` — the reconstruction a
+/// *format conversion* performs. Unlike the comment-preserving edits above, this
+/// deliberately rebuilds the block: a conversion crosses formats (a YAML comment
+/// has no JSON home), so only the values survive. The block is synthesized in
+/// `target`'s archetype and every entry spliced in through fig's [`Embed`], so
+/// each format's fences, escaping, and (for HTML islands) entity-encoding are the
+/// library's business rather than reproduced here.
+///
+/// Keys are written in the mapping's own order — frontmatter order is
+/// significant to readers — with the same block layout (`width(1)`, one list item
+/// per line) [`crate::meta::serialize_mapping`] uses, so a converted block reads
+/// like a hand-authored one.
+pub fn reformat_block(body: &str, mapping: &Mapping, target: EmbedType) -> Result<String> {
+    let mut embed = Embed::open_or_init(body.as_bytes(), target)?;
+    // Block layout for nested maps/sequences, matching `serialize_mapping`; a
+    // scalar ignores the width, so it is harmless there.
+    let options = fig::SerializeOptions::default().width(1);
+    for (key, value) in mapping {
+        embed.set_value_with(
+            &[Segment::Key(key.as_str())],
+            fig::Value::from(value),
+            options,
+        )?;
+    }
+    Ok(embed.render()?.to_string())
 }
 
 #[cfg(test)]

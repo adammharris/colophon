@@ -159,6 +159,41 @@ impl EmbedStyle {
     }
 }
 
+/// The [`EmbedStyle`] *family* a concrete [`EmbedType`] belongs to — the inverse
+/// (on the style axis) of [`embed_carrier`], which resolves a `(style, format)`
+/// pair back to a carrier. Pairing it with a new metadata format is how a
+/// *format conversion* keeps a document's embedding shape while changing only its
+/// frontmatter language: classify the current archetype, then [`embed_carrier`]
+/// the same style with the target format.
+///
+/// The bare delimiter frontmatters (`---`/`+++`/`;;;`) and the labeled markdown
+/// frontmatters (`---json`/`---toml`/`---fig`) are all [`Delimited`](EmbedStyle::Delimited);
+/// [`embed_carrier`] then lands each format on colophon's canonical delimiter
+/// spelling. Endmatter is grouped with the fenced [`CodeBlock`](EmbedStyle::CodeBlock)
+/// forms (it is a trailing ```` ```endmatter ```` block); converting it to another
+/// format therefore moves it to a leading fenced block, since only YAML has an
+/// endmatter archetype.
+pub fn embed_style_of(kind: EmbedType) -> EmbedStyle {
+    use EmbedType as E;
+    match kind {
+        E::FrontmatterYaml
+        | E::FrontmatterJson
+        | E::PlusToml
+        | E::MdFrontmatterJson
+        | E::MdFrontmatterToml
+        | E::MdFrontmatterFig => EmbedStyle::Delimited,
+        E::EndmatterYaml | E::FencedYaml | E::FencedJson | E::FencedToml | E::FrontmatterFig => {
+            EmbedStyle::CodeBlock
+        }
+        E::HtmlScriptYaml | E::HtmlScriptJson | E::HtmlScriptToml | E::HtmlScriptFig => {
+            EmbedStyle::HtmlScript
+        }
+        E::HtmlCodeYaml | E::HtmlCodeJson | E::HtmlCodeToml | E::HtmlCodeFig => {
+            EmbedStyle::HtmlCode
+        }
+    }
+}
+
 /// Resolve an [`EmbedStyle`] + metadata `format` to the carrier a new document
 /// should get. `Separate` maps to a whole-file sidecar in `format`; every other
 /// style maps to the concrete [`EmbedType`] for that `(style, format)` pair.
