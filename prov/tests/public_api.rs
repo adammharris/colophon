@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use prov::fs::{DirEntry, Metadata};
 use prov::{
-    Capabilities, ChangeSet, Discovery, Error, InMemoryIndex, Minter, RelationSet, StdFs, Storage,
-    Workspace, block_on,
+    Capabilities, ChangeSet, Discovery, Error, InMemoryFs, InMemoryIndex, Minter, RelationSet,
+    StdFs, Storage, Workspace, block_on,
 };
 
 fn tmp(name: &str) -> PathBuf {
@@ -94,6 +94,76 @@ fn a_path_escaping_the_root_is_refused_by_apply() {
         "expected Escape, got {err:?}"
     );
     assert!(!root.parent().unwrap().join("escapee.md").exists());
+}
+
+// ───────────────────────── InMemoryFs and the borrow blanket impls ──────────
+
+#[test]
+fn in_memory_fs_drives_a_workspace_through_the_public_api() {
+    let fs = InMemoryFs::new();
+    block_on(fs.write(Path::new("index.md"), b"---\ntitle: Home\n---\n# Home\n")).unwrap();
+
+    let ws = Workspace::builder(fs)
+        .root(Path::new(""))
+        .relations(RelationSet::diaryx())
+        .build();
+    let node = block_on(ws.tree("index.md")).expect("tree");
+    assert_eq!(node.title.as_deref(), Some("Home"));
+}
+
+// The `&fs` receivers below are not redundant despite what `needless_borrow`
+// thinks: method resolution stops at the first type in the autoderef chain
+// with a match, so calling through a value already typed `&InMemoryFs`
+// resolves to the blanket `impl Storage for &S`, while calling on `fs`
+// directly would resolve to `InMemoryFs`'s own impl instead. The whole point
+// of this test is to prove the former compiles and behaves identically to the
+// latter, so the borrow must stay.
+#[allow(clippy::needless_borrow)]
+#[test]
+fn a_borrowed_storage_backend_is_itself_storage() {
+    // The blanket `impl<S: Storage + ?Sized> Storage for &S` is what lets an
+    // owned backend be lent to something generic over `S: Storage` — proven
+    // here by driving reads and writes through `&InMemoryFs` rather than the
+    // owned value, and by checking that the *real* capabilities come through
+    // rather than the trait's pessimistic defaults.
+    let fs = InMemoryFs::new();
+    block_on((&fs).write(Path::new("doc.md"), b"hello")).unwrap();
+    assert_eq!(
+        block_on((&fs).read_to_string(Path::new("doc.md"))).unwrap(),
+        "hello"
+    );
+    assert_eq!((&fs).capabilities(), Capabilities::IN_MEMORY);
+}
+
+#[test]
+fn an_arc_wrapped_storage_backend_is_itself_storage() {
+    let fs = std::sync::Arc::new(InMemoryFs::new());
+    block_on(fs.write(Path::new("doc.md"), b"hello")).unwrap();
+    assert_eq!(
+        block_on(fs.read_to_string(Path::new("doc.md"))).unwrap(),
+        "hello"
+    );
+    assert_eq!(fs.capabilities(), Capabilities::IN_MEMORY);
+}
+
+#[test]
+fn a_borrowed_backend_can_build_a_workspace_and_is_still_usable_afterward() {
+    // The motivating use case from the migration this blanket impl exists
+    // for: a caller holds an owned backend and wants to lend it to a
+    // temporary `Workspace` without moving it or wrapping it in an `Arc` it
+    // doesn't otherwise need.
+    let fs = InMemoryFs::new();
+    block_on(fs.write(Path::new("index.md"), b"---\ntitle: Home\n---\n# Home\n")).unwrap();
+
+    let ws = Workspace::builder(&fs)
+        .root(Path::new(""))
+        .relations(RelationSet::diaryx())
+        .build();
+    let node = block_on(ws.tree("index.md")).expect("tree");
+    assert_eq!(node.title.as_deref(), Some("Home"));
+
+    // `fs` was only borrowed, not consumed — it's still usable here.
+    assert!(block_on(fs.try_exists(Path::new("index.md"))).unwrap());
 }
 
 // ───────────────────────── Send-ness ────────────────────────────────────────

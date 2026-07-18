@@ -18,7 +18,12 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
+
+pub mod memory;
+
+pub use memory::InMemoryFs;
 
 /// An async filesystem backend prov can drive.
 ///
@@ -173,6 +178,134 @@ pub trait Storage {
     }
 }
 
+/// A borrowed [`Storage`] is itself a [`Storage`] — so an owned backend can be
+/// lent to something generic over `S: Storage` (e.g. a temporary
+/// [`crate::workspace::Workspace`]) without moving it or wrapping it in an
+/// `Arc` the caller doesn't otherwise need.
+///
+/// Every member is forwarded explicitly, including
+/// [`capabilities`](Storage::capabilities), [`sync`](Storage::sync), and
+/// [`write_atomic`](Storage::write_atomic) — leaving any of these to inherit
+/// the trait's defaults would silently downgrade a real backend's guarantees
+/// to the pessimistic ones the moment it was borrowed, which is exactly the
+/// silent-discard the durability members exist to prevent.
+impl<S: Storage + ?Sized> Storage for &S {
+    async fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        (**self).read(path).await
+    }
+
+    async fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        (**self).read_to_string(path).await
+    }
+
+    async fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+        (**self).read_dir(path).await
+    }
+
+    async fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        (**self).write(path, contents).await
+    }
+
+    async fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        (**self).create_dir_all(path).await
+    }
+
+    async fn remove_file(&self, path: &Path) -> io::Result<()> {
+        (**self).remove_file(path).await
+    }
+
+    async fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        (**self).remove_dir_all(path).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        (**self).rename(from, to).await
+    }
+
+    async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        (**self).metadata(path).await
+    }
+
+    async fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        (**self).try_exists(path).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        (**self).capabilities()
+    }
+
+    async fn sync(&self, path: &Path) -> io::Result<()> {
+        (**self).sync(path).await
+    }
+
+    async fn write_atomic(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        (**self).write_atomic(path, contents).await
+    }
+}
+
+/// An `Arc<S>` is itself a [`Storage`] on the same terms as `&S` above — so a
+/// backend shared across several owners (several open `Workspace`s, a
+/// multi-tab web client) still carries its real capabilities through the
+/// `Arc`, rather than an adapter that forgot to unwrap it silently degrading
+/// to [`Capabilities::NONE`].
+///
+/// `Arc<S>` derefs to `S` exactly like `&S` does, so the same explicit,
+/// every-member forwarding applies for the same reason: the trait's defaults
+/// must never be reached by accident.
+impl<S: Storage + ?Sized> Storage for Arc<S> {
+    async fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        (**self).read(path).await
+    }
+
+    async fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        (**self).read_to_string(path).await
+    }
+
+    async fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+        (**self).read_dir(path).await
+    }
+
+    async fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        (**self).write(path, contents).await
+    }
+
+    async fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        (**self).create_dir_all(path).await
+    }
+
+    async fn remove_file(&self, path: &Path) -> io::Result<()> {
+        (**self).remove_file(path).await
+    }
+
+    async fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        (**self).remove_dir_all(path).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        (**self).rename(from, to).await
+    }
+
+    async fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        (**self).metadata(path).await
+    }
+
+    async fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        (**self).try_exists(path).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        (**self).capabilities()
+    }
+
+    async fn sync(&self, path: &Path) -> io::Result<()> {
+        (**self).sync(path).await
+    }
+
+    async fn write_atomic(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        (**self).write_atomic(path, contents).await
+    }
+}
+
 /// The durability guarantees a [`Storage`] backend can make — declared by the
 /// backend through [`Storage::capabilities`], honored by prov's crash-safety
 /// machinery.
@@ -223,6 +356,23 @@ impl Capabilities {
     pub const LOCAL_FS: Self = Self {
         atomic_replace: true,
         durable_sync: true,
+        native_transactions: false,
+    };
+
+    /// An in-process, memory-only store ([`InMemoryFs`]): every mutation takes
+    /// the backend's single lock for its whole duration, so one write already
+    /// swaps old bytes for new as one indivisible step — no separate
+    /// temp-then-rename dance is needed for `atomic_replace` to be true. But
+    /// nothing here is backed by anything other than process memory, so
+    /// `durable_sync` is false: there is nothing to flush, and the entire
+    /// store evaporates the instant the process exits. `native_transactions`
+    /// is false too — the lock makes each *single* call atomic, not a batch of
+    /// several calls committed together, so a multi-file change set still
+    /// needs prov's own journal over this backend exactly as it would over a
+    /// real filesystem.
+    pub const IN_MEMORY: Self = Self {
+        atomic_replace: true,
+        durable_sync: false,
         native_transactions: false,
     };
 }

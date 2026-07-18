@@ -85,7 +85,7 @@ pub use document::{
 pub use error::{Error, Result};
 pub use exec::block_on;
 pub use fig::Format;
-pub use fs::{Capabilities, StdFs, Storage};
+pub use fs::{Capabilities, DirEntry, FileType, InMemoryFs, Metadata, StdFs, Storage};
 pub use identity::{Id, IdentityPolicy, Minter, NoIdentity, Registration, Trigger};
 pub use index::{FileIndex, InMemoryIndex, IndexStore, NoIndex};
 pub use intake::{Adoption, PlanOutcome, StructurePlan, SynthNode};
