@@ -1,6 +1,6 @@
-```fig
-part_of = [prov](/README.md)
-```
+---
+part_of: '[prov](/README.md)'
+---
 # prov — design & vision
 
 > A *self-describing plaintext workspace*: a set of documents whose structure

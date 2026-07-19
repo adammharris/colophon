@@ -1,6 +1,6 @@
-```fig
-part_of = [prov](/README.md)
-```
+---
+part_of: '[prov](/README.md)'
+---
 # Reference styles
 
 How a durable reference — a relation target in metadata, or (eventually) a body

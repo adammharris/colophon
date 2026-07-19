@@ -1,6 +1,6 @@
-```fig
-part_of = [prov](/README.md)
-```
+---
+part_of: '[prov](/README.md)'
+---
 # `init` over existing content — detection & adoption
 
 > Working design. What `prov init` should do when the target directory

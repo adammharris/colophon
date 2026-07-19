@@ -1,7 +1,7 @@
-```fig
-title = Getting Started with prov
-part_of = [prov](/README.md)
-```
+---
+title: Getting Started with prov
+part_of: '[prov](/README.md)'
+---
 
 # Getting Started with prov
 
