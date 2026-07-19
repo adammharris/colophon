@@ -17,7 +17,7 @@ name: Homebrew
 #
 # Runs on `v*.*.*` tags. Prerequisite before the first tagged release: add a
 # HOMEBREW_TAP_TOKEN secret to this repo — a PAT with contents:write on
-# adammharris/homebrew-tap.
+# diaryx-org/homebrew-tap.
 on:
   push: { tags: [v*.*.*] }
   workflow_dispatch: null
@@ -87,7 +87,7 @@ jobs:
     - name: Compute checksums and render the Homebrew formula
       run: |
         version="${GITHUB_REF_NAME#v}"
-        base="https://github.com/adammharris/prov/releases/download/${GITHUB_REF_NAME}"
+        base="https://github.com/diaryx-org/prov/releases/download/${GITHUB_REF_NAME}"
         mac_arm64_sha=$(curl -sL "$base/prov-macos-arm64.tar.gz" | sha256sum | cut -d' ' -f1)
         mac_x64_sha=$(curl -sL "$base/prov-macos-x86_64.tar.gz" | sha256sum | cut -d' ' -f1)
         linux_x64_sha=$(curl -sL "$base/prov-linux-x86_64.tar.gz" | sha256sum | cut -d' ' -f1)
@@ -95,28 +95,28 @@ jobs:
         cat > /tmp/prov.rb <<RUBY
         class Prov < Formula
           desc "Command-line companion for the prov self-describing workspace library"
-          homepage "https://github.com/adammharris/prov"
+          homepage "https://github.com/diaryx-org/prov"
           version "$version"
           license "MIT OR Apache-2.0"
 
           on_macos do
             on_arm do
-              url "https://github.com/adammharris/prov/releases/download/v$version/prov-macos-arm64.tar.gz"
+              url "https://github.com/diaryx-org/prov/releases/download/v$version/prov-macos-arm64.tar.gz"
               sha256 "$mac_arm64_sha"
             end
             on_intel do
-              url "https://github.com/adammharris/prov/releases/download/v$version/prov-macos-x86_64.tar.gz"
+              url "https://github.com/diaryx-org/prov/releases/download/v$version/prov-macos-x86_64.tar.gz"
               sha256 "$mac_x64_sha"
             end
           end
 
           on_linux do
             on_arm do
-              url "https://github.com/adammharris/prov/releases/download/v$version/prov-linux-aarch64.tar.gz"
+              url "https://github.com/diaryx-org/prov/releases/download/v$version/prov-linux-aarch64.tar.gz"
               sha256 "$linux_arm64_sha"
             end
             on_intel do
-              url "https://github.com/adammharris/prov/releases/download/v$version/prov-linux-x86_64.tar.gz"
+              url "https://github.com/diaryx-org/prov/releases/download/v$version/prov-linux-x86_64.tar.gz"
               sha256 "$linux_x64_sha"
             end
           end
@@ -133,7 +133,7 @@ jobs:
     - name: Push to the tap
       env: { COMMITTER_TOKEN: '${{ secrets.HOMEBREW_TAP_TOKEN }}' }
       run: |
-        git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/adammharris/homebrew-tap" tap
+        git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/diaryx-org/homebrew-tap" tap
         cp /tmp/prov.rb tap/Formula/prov.rb
         cd tap
         git config user.name "github-actions[bot]"
