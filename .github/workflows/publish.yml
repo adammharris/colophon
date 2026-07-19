@@ -60,7 +60,7 @@ jobs:
         already_published() {
           local crate="$1" code
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
-            -A "prov-release (github-actions; https://github.com/adammharris/prov)" \
+            -A "prov-release (github-actions; https://github.com/diaryx-org/prov)" \
             "https://crates.io/api/v1/crates/${crate}/${version}")
           [ "$code" = "200" ]
         }
