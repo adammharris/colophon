@@ -278,6 +278,32 @@ pub enum Finding {
     /// may be silently ignoring settings a newer prov wrote. Diagnosis only —
     /// the resolution is to upgrade prov, not to edit the workspace.
     ConfigSpecAhead { doc: PathBuf, declared: i64 },
+    /// A record store — reached through the `pointer` relation (`registry`,
+    /// `recycle_bin`, or a `fields` vocabulary) — is a **markdown** document
+    /// (fenced frontmatter) rather than a whole-file config document. prov
+    /// re-lays-out these stores as sorted records (DESIGN §5), so a prose carrier
+    /// has no stable home; make it a `.yaml`/`.json`/`.figl` file. Diagnosis only.
+    MalformedStore { doc: PathBuf, pointer: String },
+    /// A **closed** controlled field (`field`) carries a `value` that is not a
+    /// known term in its vocabulary — the consistency guarantee closed vocabularies
+    /// exist for (a mistyped diaryx `audience` is a disclosure bug). `retired` is
+    /// true when the value *was* a term but has been retired. Diagnosis only.
+    UnknownTerm {
+        doc: PathBuf,
+        field: String,
+        value: String,
+        retired: bool,
+    },
+    /// An **open** controlled field (`field`) carries a `value` that is not a
+    /// known term but closely resembles `suggestion` — casing/spelling drift in a
+    /// folksonomy (`todo` vs `to-do`). A warning, not an error: open vocabularies
+    /// admit new values, so this only nudges toward an existing spelling.
+    TermNearMiss {
+        doc: PathBuf,
+        field: String,
+        value: String,
+        suggestion: String,
+    },
 }
 
 impl fmt::Display for Finding {
@@ -398,12 +424,52 @@ impl fmt::Display for Finding {
                     issue.key,
                     expected.join(", ")
                 ),
+                crate::config::ConfigIssueKind::SpanningNotSingleParent { inverse } => write!(
+                    f,
+                    "{}: spanning relation's inverse `{inverse}` is `cardinality: many` — a spanning tree needs a single parent (make `{inverse}` cardinality `one`)",
+                    doc.display(),
+                ),
             },
             Finding::ConfigSpecAhead { doc, declared } => write!(
                 f,
                 "{}: config declares spec {declared}, newer than this build's spec {} — some settings may be ignored (upgrade prov)",
                 doc.display(),
                 crate::config::SPEC_VERSION
+            ),
+            Finding::MalformedStore { doc, pointer } => write!(
+                f,
+                "{}: `{pointer}` store is markdown — a record store must be a whole-file config document (.yaml/.json/.figl)",
+                doc.display(),
+            ),
+            Finding::UnknownTerm {
+                doc,
+                field,
+                value,
+                retired,
+            } => {
+                if *retired {
+                    write!(
+                        f,
+                        "{}: `{field}: {value}` names a retired term (no longer a valid value)",
+                        doc.display(),
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{}: `{field}: {value}` is not a known term in this closed vocabulary",
+                        doc.display(),
+                    )
+                }
+            }
+            Finding::TermNearMiss {
+                doc,
+                field,
+                value,
+                suggestion,
+            } => write!(
+                f,
+                "{}: `{field}: {value}` is not a known term — did you mean `{suggestion}`?",
+                doc.display(),
             ),
         }
     }
@@ -570,6 +636,132 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                 .await?,
         );
         findings.extend(self.config_findings(start).await?);
+        findings.extend(self.store_findings(start).await?);
+        findings.extend(
+            self.vocabulary_findings(start, &census, &content_bodies)
+                .await?,
+        );
+        Ok(findings)
+    }
+
+    /// Verify every **record store** the workspace reaches — the id registry, the
+    /// recycle-bin index, and each `fields` vocabulary — is a whole-file config
+    /// document, emitting a [`Finding::MalformedStore`] for any found in a markdown
+    /// carrier (DESIGN §5, the whole-file rule). This *reports* rather than aborts:
+    /// the loaders themselves hard-error on a markdown store, but `check` surfaces
+    /// the same problem as a finding so a diagnosis run lists it alongside the rest.
+    async fn store_findings(&self, start: &Path) -> Result<Vec<Finding>> {
+        let mut stores: Vec<(&'static str, PathBuf)> = Vec::new();
+        if let Some(p) = self.registry_path(start).await? {
+            stores.push(("registry", p));
+        }
+        if let Some(p) = self.recycle_bin_path(start).await? {
+            stores.push(("recycle_bin", p));
+        }
+        let config = self.effective_config(start).await?;
+        for spec in config.fields.values() {
+            if let Some(p) = self.vocabulary_path(start, &spec.vocabulary) {
+                stores.push(("vocabulary", p));
+            }
+        }
+        let mut findings = Vec::new();
+        for (pointer, path) in stores {
+            if let Ok((_, doc)) = self.load(&path).await
+                && let Some(carrier) = doc.carrier
+                && crate::document::require_whole_file(&path, carrier).is_err()
+            {
+                findings.push(Finding::MalformedStore {
+                    doc: path,
+                    pointer: pointer.to_string(),
+                });
+            }
+        }
+        Ok(findings)
+    }
+
+    /// Check every controlled `fields` value against its vocabulary over the
+    /// reachable document set (§8's reachability bound, the same set
+    /// [`fixity_findings`](Self::fixity_findings) walks). A **closed** field emits
+    /// a [`Finding::UnknownTerm`] for any value not a known term; an **open** field
+    /// emits a [`Finding::TermNearMiss`] only when an unknown value closely
+    /// resembles a known term (typo/casing drift). A field whose vocabulary cannot
+    /// be loaded contributes no term findings — its store is reported separately by
+    /// [`store_findings`](Self::store_findings).
+    async fn vocabulary_findings(
+        &self,
+        start: &Path,
+        census: &[CensusEntry],
+        content_bodies: &[PathBuf],
+    ) -> Result<Vec<Finding>> {
+        let config = self.effective_config(start).await?;
+        if config.fields.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Load each field's vocabulary once. A store that fails to load (missing,
+        // markdown) simply drops out — its own finding comes from `store_findings`.
+        let mut vocabs: Vec<(String, crate::config::OpenClosed, crate::vocabulary::Vocabulary)> =
+            Vec::new();
+        for (field, spec) in &config.fields {
+            if let Ok(Some(vocab)) = self.load_vocabulary(start, &spec.vocabulary).await {
+                vocabs.push((field.clone(), spec.values, vocab));
+            }
+        }
+        if vocabs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // The reachable document set (mirrors `fixity_findings`).
+        let mut reachable: BTreeSet<PathBuf> = BTreeSet::new();
+        reachable.insert(link::normalize(start));
+        reachable.extend(content_bodies.iter().cloned());
+        for entry in census {
+            match &entry.resolution {
+                Resolution::Path(p) | Resolution::Id { to: p, .. } => {
+                    reachable.insert(p.clone());
+                }
+                Resolution::CaseMismatch { got, actual } => {
+                    reachable.insert(got.with_file_name(actual));
+                }
+                _ => {}
+            }
+        }
+
+        let mut findings = Vec::new();
+        for path in reachable {
+            let Ok((_, doc)) = self.load(&path).await else {
+                continue;
+            };
+            for (field, values, vocab) in &vocabs {
+                let Some(field_value) = doc.meta.get(field) else {
+                    continue;
+                };
+                for term in field_value.link_strings() {
+                    if vocab.accepts(&term) {
+                        continue;
+                    }
+                    match values {
+                        crate::config::OpenClosed::Closed => findings.push(Finding::UnknownTerm {
+                            doc: path.clone(),
+                            field: field.clone(),
+                            value: term.clone(),
+                            retired: vocab.is_retired(&term),
+                        }),
+                        crate::config::OpenClosed::Open => {
+                            if let Some(suggestion) =
+                                crate::textdist::nearest_owned(&term, &vocab.live_term_names())
+                            {
+                                findings.push(Finding::TermNearMiss {
+                                    doc: path.clone(),
+                                    field: field.clone(),
+                                    value: term.clone(),
+                                    suggestion,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(findings)
     }
 
@@ -1299,6 +1491,114 @@ mod tests {
         write(&dir, "a.md", "---\npart_of: index.md\n---\n");
         let ws = Workspace::builder(StdFs).root(&dir).build();
         assert_eq!(block_on(ws.check("index.md")).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_closed_vocabulary_flags_an_unknown_term() {
+        let dir = tempdir("vocab-closed");
+        write(
+            &dir,
+            "index.md",
+            "---\n\
+             contents:\n- a.md\n\
+             audience: public\n\
+             prov:\n  fields:\n    audience:\n      values: closed\n      vocabulary: vocab/audiences.yaml\n\
+             ---\n",
+        );
+        // a.md carries a typo'd audience — in a closed vocabulary that is a hard finding.
+        write(
+            &dir,
+            "a.md",
+            "---\npart_of: index.md\naudience: freinds\n---\n",
+        );
+        write(
+            &dir,
+            "vocab/audiences.yaml",
+            "title: Audiences\npart_of: /index.md\nvocabulary:\n  field: audience\n  values: closed\nterms:\n  public: {}\n  friends: {}\n",
+        );
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let findings = block_on(ws.check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(
+                f,
+                Finding::UnknownTerm { field, value, .. } if field == "audience" && value == "freinds"
+            )),
+            "{findings:?}"
+        );
+        // The valid `audience: public` on the root raises nothing.
+        assert!(
+            !findings
+                .iter()
+                .any(|f| matches!(f, Finding::UnknownTerm { value, .. } if value == "public")),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_open_vocabulary_only_warns_on_a_near_miss() {
+        let dir = tempdir("vocab-open");
+        write(
+            &dir,
+            "index.md",
+            "---\n\
+             contents:\n- near.md\n- novel.md\n\
+             prov:\n  fields:\n    tags:\n      values: open\n      vocabulary: vocab/tags.yaml\n\
+             ---\n",
+        );
+        // `todi` ~ `todo` (near miss → warn); `research` is genuinely new (allowed).
+        write(&dir, "near.md", "---\npart_of: index.md\ntags: todi\n---\n");
+        write(
+            &dir,
+            "novel.md",
+            "---\npart_of: index.md\ntags: research\n---\n",
+        );
+        write(
+            &dir,
+            "vocab/tags.yaml",
+            "vocabulary:\n  field: tags\n  values: open\nterms:\n  todo: {}\n  idea: {}\n",
+        );
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let findings = block_on(ws.check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(
+                f,
+                Finding::TermNearMiss { value, suggestion, .. } if value == "todi" && suggestion == "todo"
+            )),
+            "{findings:?}"
+        );
+        // An unrelated new value in an open vocabulary is allowed silently.
+        assert!(
+            !findings
+                .iter()
+                .any(|f| matches!(f, Finding::TermNearMiss { value, .. } if value == "research")),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_markdown_registry_store_is_flagged() {
+        let dir = tempdir("vocab-store");
+        write(
+            &dir,
+            "index.md",
+            "---\ncontents:\n- a.md\nregistry: registry.md\n---\n",
+        );
+        write(&dir, "a.md", "---\npart_of: index.md\n---\n");
+        // A registry in a markdown carrier — refused as a record store.
+        write(
+            &dir,
+            "registry.md",
+            "---\ntitle: Registry\nregistry:\n  bcdfghj: a.md\n---\nprose\n",
+        );
+        let ws = Workspace::builder(StdFs).root(&dir).build();
+        let findings = block_on(ws.check("index.md")).unwrap();
+        assert!(
+            findings.iter().any(|f| matches!(
+                f,
+                Finding::MalformedStore { pointer, .. } if pointer == "registry"
+            )),
+            "{findings:?}"
+        );
     }
 
     #[test]

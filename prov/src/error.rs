@@ -38,6 +38,18 @@ pub enum Error {
     #[error("content error: {0}")]
     Content(String),
 
+    /// A record store — the id registry, the recycle-bin index, or a flat
+    /// vocabulary — was found in a **markdown** carrier (fenced frontmatter)
+    /// rather than a whole-file config document (`.yaml`/`.json`/`.figl`). prov
+    /// imposes a sorted, one-record-per-line layout on these stores (DESIGN §5),
+    /// so a prose carrier has no stable home for its records and is refused. Make
+    /// it a bare config file. See [`crate::document::require_whole_file`].
+    #[error(
+        "record store must be a whole-file config document (.yaml/.json/.figl), \
+         not markdown frontmatter: {0}"
+    )]
+    MarkdownStore(PathBuf),
+
     /// A path handed to a workspace read or write resolved *outside* the
     /// workspace root — an absolute path, or one that climbs above the root with
     /// `..`. prov clamps every I/O to the tree it was pointed at (a link

@@ -66,21 +66,25 @@ pub mod meta;
 pub mod mutate;
 pub mod relation;
 pub mod route;
+pub mod textdist;
 pub mod title;
 pub mod tree;
 pub mod validate;
+pub mod vocabulary;
 pub mod workspace;
 
 pub use change::{ChangeSet, FileOp};
 pub use config::{
-    ConfigIssue, ConfigIssueKind, Fixity, IdStorage, RelationStyleConfig, WorkspaceConfig,
-    diagnose, metadata_format_from_str, metadata_format_str, spec_ahead,
+    ConfigIssue, ConfigIssueKind, FieldSpec, Fixity, IdStorage, OpenClosed, RelationDef,
+    RelationStyleConfig, WorkspaceConfig, diagnose, metadata_format_from_str, metadata_format_str,
+    spec_ahead,
 };
 pub use content::ContentFormat;
 pub use content::{code_spans, render_html};
 pub use discovery::{Discovered, Discovery, discover};
 pub use document::{
     Document, EmbedStyle, EmbedType, MetaCarrier, embed_carrier, embed_style_of, is_opaque_payload,
+    require_whole_file,
 };
 pub use error::{Error, Result};
 pub use exec::block_on;
@@ -101,4 +105,5 @@ pub use route::{Layout, RoutePlan};
 pub use title::{TitleIndex, TitleMatch};
 pub use tree::{Node, NodeKind, TreeOptions};
 pub use validate::{Backlink, CensusEntry, Finding, Fix, LinkSite, Resolution};
+pub use vocabulary::{Term, Vocabulary};
 pub use workspace::{Target, Workspace, WorkspaceBuilder};

@@ -4,6 +4,7 @@ author: adammharris
 created: 2026-07-06
 contents:
 - '[Design](docs/DESIGN.md)'
+- '[Spec](/docs/spec.md)'
 - '[Getting Started](docs/getting-started.md)'
 - '[Config Vocab](/docs/config-vocab.md)'
 - '[Init Adoption](/docs/init-adoption.md)'
@@ -18,8 +19,26 @@ prov:
   fixity: attachments
   recycle_bin: true
   metadata:
-    format: fig
-    embed: code_block
+    format: yaml
+    embed: delimited
+  spanning: contents
+  relations:
+    contents:
+      means: documents contained by this one
+      cardinality: many
+      inverse: part_of
+    part_of:
+      means: the document that contains this one
+      cardinality: one
+      inverse: contents
+    links:
+      means: arbitrary cross-references to other documents
+      cardinality: many
+      inverse: link_of
+    link_of:
+      means: documents that cross-reference this one
+      cardinality: many
+      inverse: links
   references:
     notation: markdown
     path_style: root

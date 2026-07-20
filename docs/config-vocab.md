@@ -75,9 +75,20 @@ prov:
     path_style: root          # root | relative | canonical   (path targets only)
     target: path              # path | id | alias
     label: false              # bool — id/alias references carry a |Title label
-  relations:                  # per-relation overrides of the reference axes
-    contents: { notation: wikilink, target: alias }
-    part_of:  { target: id }
+  spanning: contents          # the single-parent discovery spine (DESIGN §3)
+  relations:                  # per-relation *definitions* and reference-axis overrides
+    contents:
+      means: "documents contained by this one"   # human gloss — carried, never read
+      cardinality: many       # one | many
+      inverse: part_of        # the reciprocal field
+      notation: wikilink      # …plus any reference-axis override, same block
+      target: alias
+    part_of: { cardinality: one, inverse: contents, target: id }
+  fields:                     # controlled vocabularies (tags, audiences, …)
+    audience:
+      values: closed          # open (folksonomy) | closed (must be a known term)
+      vocabulary: '[Audiences](/vocab/audiences.yaml)'   # pointer to the term store
+      reify: true             # each term is its own node (backlinks, prose, stable id)
   id_storage: both            # registry | frontmatter | both
   updated: modified           # name of the machine-maintained timestamp field (omit/"" = off)
 
@@ -91,7 +102,12 @@ Every axis is optional; an absent key keeps its default. Defaults:
 `content_format: markdown`, `metadata.format: yaml`, `metadata.embed: delimited`,
 `references: { notation: markdown, path_style: root, target: path, label: false }`,
 `id_storage: both`, `updated: ""`, `identity: lazy`, `fixity: attachments`,
-`recycle_bin: true`.
+`recycle_bin: true`. Absent `spanning`/`relations` **definitions** ⇒ the built-in
+diaryx vocabulary (`RelationSet::from_config` falls back), so a minimal vault
+declares none; absent `fields` ⇒ no field is controlled (every such field is
+ordinary carried content). The `spanning`, relation-definition
+(`cardinality`/`inverse`/`means`), and `fields` axes are the *self-description*
+layer — see [Spec](/docs/spec.md).
 
 ### The two reference axes, orthogonalized
 
@@ -147,8 +163,20 @@ silently ignore:
 - **Unknown key** that is a near-miss of a real axis (e.g. `notaton`) — a likely
   typo, reported with the suggestion. A key resembling *no* axis is left alone (a
   user field), except inside the closed sub-blocks (`metadata`, `references`, a
-  `relations` entry), where every key is expected to be a known axis.
+  `relations` entry, a `fields` entry), where every key is expected to be a known
+  axis. A `relations` entry additionally accepts the definition keys
+  `cardinality`/`inverse`/`means`.
+- **Spanning invariant** — a `spanning` relation whose declared `inverse` is
+  itself declared `cardinality: many` cannot form a single-parent tree (DESIGN
+  §3), reported as `SpanningNotSingleParent`.
 - `spec`, and the config document's own `title`/`part_of`, are whitelisted.
+
+Beyond the two config surfaces, `check` also validates the workspace's **stores**
+and **controlled fields** (see [Spec](/docs/spec.md)): a `MalformedStore` finding
+for a registry/recycle/vocabulary pointer that resolves to a markdown document
+rather than a whole-file config document; `UnknownTerm` for a closed-field value
+that is not a known term; and `TermNearMiss` for an open-field value that closely
+resembles one.
 
 `prov config <key> <value>` runs the same `diagnose` over a one-key probe and
 **refuses to write** a setting `check` would flag. Dotted keys address nested

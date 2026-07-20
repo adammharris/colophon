@@ -30,6 +30,8 @@ use crate::document::EmbedStyle;
 use crate::identity::Registration;
 use crate::link::{Addressing, LinkStyle, Notation, PathStyle, ReferenceStyle};
 use crate::meta::{Mapping, Value};
+use crate::relation::Cardinality;
+use crate::textdist::nearest;
 
 /// The config-vocabulary version stamped as `spec` and recognized on read — a
 /// marker so a foreign tool (or a future prov) knows which vocabulary it is
@@ -61,6 +63,81 @@ pub struct RelationStyleConfig {
     pub target: Option<Addressing>,
     /// The `id`-wikilink label override.
     pub label: Option<bool>,
+}
+
+/// A relation *definition* declared in a config's `relations` block — the
+/// structural half of an entry, parallel to the reference-style half
+/// ([`RelationStyleConfig`]). This is what makes a workspace's vocabulary
+/// **self-describing** (DESIGN §1, the `prov/1` spec): a foreign reader learns
+/// the graph — which fields are relations, their inverse, their cardinality —
+/// from the document itself rather than assuming prov's `contents`/`part_of`
+/// preset. Each field is optional; a `relations` entry may carry only style, only
+/// definition, or both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RelationDef {
+    /// How many targets the field may hold (`one` / `many`). `None` leaves the
+    /// relation's cardinality to whatever the built [`RelationSet`] defaults it to
+    /// (`many`, the permissive choice) when this def creates the relation.
+    pub cardinality: Option<Cardinality>,
+    /// The reciprocal relation's field name, bidirectionally maintained.
+    pub inverse: Option<String>,
+    /// A free-form, human-facing gloss of what the relation means. prov never
+    /// reads this back (DESIGN §2, tier 3) — it is documentation that travels with
+    /// the data so a person reading the frontmatter learns the vocabulary too.
+    pub means: Option<String>,
+}
+
+/// Whether a controlled `fields` vocabulary is *open* (folksonomy — unknown
+/// values are allowed, only near-misses warn) or *closed* (every value must be a
+/// known term; an unknown value is an error). See the `fields` block and
+/// [`crate::vocabulary`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenClosed {
+    /// Unknown values allowed; `check` warns only on a probable typo of a known
+    /// term (casing/spelling drift).
+    #[default]
+    Open,
+    /// Every value must resolve to a known term; an unknown value is a hard
+    /// `check` finding. The right posture for a safety-critical vocabulary (a
+    /// diaryx `audience`, where a typo is a disclosure bug).
+    Closed,
+}
+
+impl OpenClosed {
+    /// Parse the `values` config spelling; unknown → `None`.
+    pub fn from_config_str(value: &str) -> Option<Self> {
+        match value {
+            "open" => Some(Self::Open),
+            "closed" => Some(Self::Closed),
+            _ => None,
+        }
+    }
+
+    /// The `values` config spelling.
+    pub fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+/// A controlled-vocabulary field declaration — an entry in the `fields` block.
+/// It turns a frontmatter field (`tags`, `audience`) that prov would otherwise
+/// merely carry (DESIGN §2, tier 3) into a *resolvable reference* prov keeps
+/// consistent: every value is checked against the vocabulary the `vocabulary`
+/// pointer reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldSpec {
+    /// Whether the value set is open (folksonomy) or closed (must be known).
+    pub values: OpenClosed,
+    /// The pointer (a link) to the vocabulary document listing this field's legal
+    /// terms — resolved like the `registry`/`config` pointers (DESIGN §6).
+    pub vocabulary: String,
+    /// Whether each term is reified as its own node (rich: backlinks, a prose
+    /// body, stable id) rather than a bare key in a flat registry. A hint to
+    /// tooling; prov validates membership either way.
+    pub reify: bool,
 }
 
 /// Where a document's stable ID is persisted — the identity-storage axis
@@ -201,6 +278,21 @@ pub struct WorkspaceConfig {
     /// every relation inherits the default. Resolve with
     /// [`resolved_relation_styles`](Self::resolved_relation_styles).
     pub relation_styles: BTreeMap<String, RelationStyleConfig>,
+    /// The name of the **spanning** relation — the single-parent containment tree
+    /// that is the workspace's discovery spine (DESIGN §3). `None` leaves it to
+    /// the built vocabulary's default. Declaring it in config is what lets a
+    /// non-diaryx vocabulary name its own spine.
+    pub spanning: Option<String>,
+    /// Per-relation structural **definitions**, keyed by relation name — the
+    /// self-describing half of the `relations` block (cardinality, inverse,
+    /// human gloss). Empty means the workspace uses its built-in vocabulary
+    /// (diaryx) unchanged. Consumed by
+    /// [`RelationSet::from_config`](crate::relation::RelationSet::from_config).
+    pub relation_defs: BTreeMap<String, RelationDef>,
+    /// Controlled-vocabulary field declarations, keyed by frontmatter field name
+    /// (`tags`, `audience`). Empty means no field is controlled — every such
+    /// field is ordinary carried content (DESIGN §2, tier 3).
+    pub fields: BTreeMap<String, FieldSpec>,
     /// Where a document's stable ID is persisted — registry, frontmatter shadow,
     /// or both (DESIGN §5). Independent of the `identity` trigger.
     pub id_storage: IdStorage,
@@ -248,6 +340,9 @@ impl Default for WorkspaceConfig {
             reference_target: Addressing::Path,
             reference_label: false,
             relation_styles: BTreeMap::new(),
+            spanning: None,
+            relation_defs: BTreeMap::new(),
+            fields: BTreeMap::new(),
             id_storage: IdStorage::Frontmatter,
             default_embed_format: fig::Format::Yaml,
             embed_style: EmbedStyle::Delimited,
@@ -408,7 +503,13 @@ impl WorkspaceConfig {
                 self.reference_label = v;
             }
         }
-        // Per-relation overrides: `relations: { <name>: { notation, target, … } }`.
+        // The spanning relation (self-description, §3): a top-level field name.
+        if let Some(v) = meta.get("spanning").and_then(Value::as_str) {
+            self.spanning = Some(v.to_string());
+        }
+        // Per-relation entries carry two orthogonal halves in one block:
+        // *style* overrides (`notation`/`path_style`/`target`/`label`) and
+        // structural *definitions* (`cardinality`/`inverse`/`means`).
         if let Some(relations) = meta.get("relations").and_then(Value::as_mapping) {
             for (name, spec) in relations {
                 let entry = self.relation_styles.entry(name.clone()).or_default();
@@ -436,6 +537,57 @@ impl WorkspaceConfig {
                 if let Some(v) = spec.get("label").and_then(Value::as_bool) {
                     entry.label = Some(v);
                 }
+                // The structural half — only recorded when at least one def key is
+                // present, so a style-only entry does not synthesize an empty def.
+                let cardinality = spec
+                    .get("cardinality")
+                    .and_then(Value::as_str)
+                    .and_then(cardinality_from_str);
+                let inverse = spec
+                    .get("inverse")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let means = spec.get("means").and_then(Value::as_str).map(str::to_string);
+                if cardinality.is_some() || inverse.is_some() || means.is_some() {
+                    let def = self.relation_defs.entry(name.clone()).or_default();
+                    if cardinality.is_some() {
+                        def.cardinality = cardinality;
+                    }
+                    if inverse.is_some() {
+                        def.inverse = inverse;
+                    }
+                    if means.is_some() {
+                        def.means = means;
+                    }
+                }
+            }
+        }
+        // Controlled-vocabulary fields: `fields: { <field>: { values, vocabulary, reify } }`.
+        if let Some(fields) = meta.get("fields").and_then(Value::as_mapping) {
+            for (name, spec) in fields {
+                // A field is only controlled once it names a vocabulary to resolve
+                // against; without one there is nothing to check membership in.
+                let Some(vocabulary) = spec
+                    .get("vocabulary")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let values = spec
+                    .get("values")
+                    .and_then(Value::as_str)
+                    .and_then(OpenClosed::from_config_str)
+                    .unwrap_or_default();
+                let reify = spec.get("reify").and_then(Value::as_bool).unwrap_or(false);
+                self.fields.insert(
+                    name.clone(),
+                    FieldSpec {
+                        values,
+                        vocabulary,
+                        reify,
+                    },
+                );
             }
         }
         if let Some(v) = meta
@@ -512,25 +664,69 @@ impl WorkspaceConfig {
         references.insert("label".into(), Value::Bool(self.reference_label));
         map.insert("references".into(), Value::Mapping(references));
 
-        if !self.relation_styles.is_empty() {
+        if let Some(spanning) = &self.spanning {
+            map.insert("spanning".into(), Value::String(spanning.clone()));
+        }
+
+        // One `relations` block carries both halves of each entry — style
+        // overrides and structural definitions — so the union of the two maps'
+        // keys is emitted, each entry merging whichever halves it has.
+        if !self.relation_styles.is_empty() || !self.relation_defs.is_empty() {
+            let mut names: Vec<&String> = self
+                .relation_styles
+                .keys()
+                .chain(self.relation_defs.keys())
+                .collect();
+            names.sort();
+            names.dedup();
             let mut relations = Mapping::new();
-            for (name, over) in &self.relation_styles {
+            for name in names {
                 let mut spec = Mapping::new();
-                if let Some(n) = over.notation {
-                    spec.insert("notation".into(), Value::String(n.as_config_str().into()));
+                if let Some(over) = self.relation_styles.get(name) {
+                    if let Some(n) = over.notation {
+                        spec.insert("notation".into(), Value::String(n.as_config_str().into()));
+                    }
+                    if let Some(p) = over.path_style {
+                        spec.insert("path_style".into(), Value::String(p.as_config_str().into()));
+                    }
+                    if let Some(t) = over.target {
+                        spec.insert("target".into(), Value::String(t.as_config_str().into()));
+                    }
+                    if let Some(l) = over.label {
+                        spec.insert("label".into(), Value::Bool(l));
+                    }
                 }
-                if let Some(p) = over.path_style {
-                    spec.insert("path_style".into(), Value::String(p.as_config_str().into()));
-                }
-                if let Some(t) = over.target {
-                    spec.insert("target".into(), Value::String(t.as_config_str().into()));
-                }
-                if let Some(l) = over.label {
-                    spec.insert("label".into(), Value::Bool(l));
+                if let Some(def) = self.relation_defs.get(name) {
+                    if let Some(c) = def.cardinality {
+                        spec.insert("cardinality".into(), Value::String(cardinality_str(c).into()));
+                    }
+                    if let Some(inv) = &def.inverse {
+                        spec.insert("inverse".into(), Value::String(inv.clone()));
+                    }
+                    if let Some(m) = &def.means {
+                        spec.insert("means".into(), Value::String(m.clone()));
+                    }
                 }
                 relations.insert(name.clone(), Value::Mapping(spec));
             }
             map.insert("relations".into(), Value::Mapping(relations));
+        }
+
+        if !self.fields.is_empty() {
+            let mut fields = Mapping::new();
+            for (name, spec) in &self.fields {
+                let mut entry = Mapping::new();
+                entry.insert(
+                    "values".into(),
+                    Value::String(spec.values.as_config_str().into()),
+                );
+                entry.insert("vocabulary".into(), Value::String(spec.vocabulary.clone()));
+                if spec.reify {
+                    entry.insert("reify".into(), Value::Bool(true));
+                }
+                fields.insert(name.clone(), Value::Mapping(entry));
+            }
+            map.insert("fields".into(), Value::Mapping(fields));
         }
 
         map.insert(
@@ -582,6 +778,11 @@ pub enum ConfigIssueKind {
         value: String,
         expected: Vec<String>,
     },
+    /// The `spanning` relation's declared `inverse` is a relation whose
+    /// cardinality is `many`, which cannot form the single-parent containment
+    /// tree the spanning relation requires (DESIGN §3). `key` is `spanning`;
+    /// `inverse` is the offending child→parent relation.
+    SpanningNotSingleParent { inverse: String },
 }
 
 /// Top-level config keys (block names + scalar axes + the `spec` marker).
@@ -591,6 +792,8 @@ const TOP_KEYS: &[&str] = &[
     "metadata",
     "references",
     "relations",
+    "spanning",
+    "fields",
     "id_storage",
     "updated",
     "identity",
@@ -599,8 +802,14 @@ const TOP_KEYS: &[&str] = &[
 ];
 /// Keys inside the `metadata:` block.
 const METADATA_KEYS: &[&str] = &["format", "embed"];
-/// Keys inside the `references:` block and each `relations.<name>` entry.
+/// The reference-style keys valid in the `references:` block and in each
+/// `relations.<name>` entry.
 const REFERENCE_KEYS: &[&str] = &["notation", "path_style", "target", "label"];
+/// The structural definition keys valid only in a `relations.<name>` entry
+/// (`means` is free-form and never near-miss-matched, like `updated`).
+const RELATION_DEF_KEYS: &[&str] = &["cardinality", "inverse", "means"];
+/// Keys inside each `fields.<name>` entry.
+const FIELD_KEYS: &[&str] = &["values", "vocabulary", "reify"];
 
 /// If `meta` declares a `spec` newer than [`SPEC_VERSION`] — the version this
 /// build understands — the declared version. The signal that prov may be
@@ -666,9 +875,23 @@ pub fn diagnose(meta: &Value) -> Vec<ConfigIssue> {
             }
             "recycle_bin" => bool_axis(&mut issues, key, value),
             "updated" => {} // free-form field name
+            "spanning" => {
+                // A relation name — must be a string; its coherence with the
+                // relations block is a cross-relation check below.
+                if value.as_str().is_none() {
+                    issues.push(ConfigIssue {
+                        key: key.clone(),
+                        kind: ConfigIssueKind::InvalidValue {
+                            value: value_summary(value),
+                            expected: vec!["a relation name".into()],
+                        },
+                    });
+                }
+            }
             "metadata" => diagnose_metadata(&mut issues, value),
             "references" => diagnose_reference_block(&mut issues, "references", value),
             "relations" => diagnose_relations(&mut issues, value),
+            "fields" => diagnose_fields(&mut issues, value),
             other => {
                 if let Some(suggestion) = nearest(other, TOP_KEYS) {
                     issues.push(unknown(key.clone(), suggestion));
@@ -676,7 +899,45 @@ pub fn diagnose(meta: &Value) -> Vec<ConfigIssue> {
             }
         }
     }
+    diagnose_spanning_invariant(&mut issues, map);
     issues
+}
+
+/// The single-parent invariant (DESIGN §3): if `spanning` names a declared
+/// relation whose declared `inverse` is itself declared with `cardinality: many`,
+/// that inverse cannot be the child→parent side of a tree — reported so an
+/// incoherent vocabulary is caught at author time rather than surfacing as a
+/// runtime `DuplicateContainment` finding. Absence (an undeclared inverse, or a
+/// spanning relation built into the vocabulary rather than declared) is left
+/// alone — only a *declared contradiction* is flagged, never under-specification.
+fn diagnose_spanning_invariant(issues: &mut Vec<ConfigIssue>, map: &Mapping) {
+    let Some(spanning) = map.get("spanning").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(relations) = map.get("relations").and_then(Value::as_mapping) else {
+        return;
+    };
+    let Some(inverse) = relations
+        .get(spanning)
+        .and_then(Value::as_mapping)
+        .and_then(|r| r.get("inverse"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let inverse_cardinality = relations
+        .get(inverse)
+        .and_then(Value::as_mapping)
+        .and_then(|r| r.get("cardinality"))
+        .and_then(Value::as_str);
+    if inverse_cardinality == Some("many") {
+        issues.push(ConfigIssue {
+            key: "spanning".into(),
+            kind: ConfigIssueKind::SpanningNotSingleParent {
+                inverse: inverse.to_string(),
+            },
+        });
+    }
 }
 
 /// Diagnose the `metadata:` block.
@@ -756,14 +1017,123 @@ fn diagnose_reference_block(issues: &mut Vec<ConfigIssue>, prefix: &str, value: 
     }
 }
 
-/// Diagnose the `relations:` block — a mapping of relation name to a
-/// reference-shaped override.
+/// Diagnose the `relations:` block — a mapping of relation name to an entry that
+/// may carry both reference-style keys and structural definition keys.
 fn diagnose_relations(issues: &mut Vec<ConfigIssue>, value: &Value) {
     let Some(map) = value.as_mapping() else {
         return block_shape_issue(issues, "relations", value);
     };
     for (name, spec) in map {
-        diagnose_reference_block(issues, &format!("relations.{name}"), spec);
+        diagnose_relation_entry(issues, name, spec);
+    }
+}
+
+/// Diagnose one `relations.<name>` entry: the reference-style axes
+/// ([`REFERENCE_KEYS`]) plus the structural definition keys
+/// ([`RELATION_DEF_KEYS`]). `means` is free-form and accepted without check;
+/// `cardinality` is enum-checked; `inverse` must be a string. An unknown key is
+/// reported only when it near-misses a valid key at this level.
+fn diagnose_relation_entry(issues: &mut Vec<ConfigIssue>, name: &str, value: &Value) {
+    let prefix = format!("relations.{name}");
+    let Some(map) = value.as_mapping() else {
+        return block_shape_issue(issues, &prefix, value);
+    };
+    for (key, v) in map {
+        let dotted = format!("{prefix}.{key}");
+        match key.as_str() {
+            "notation" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| Notation::from_config_str(s).is_some(),
+                &["markdown", "wikilink", "bare"],
+            ),
+            "path_style" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| PathStyle::from_config_str(s).is_some(),
+                &["root", "relative", "canonical"],
+            ),
+            "target" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| Addressing::from_config_str(s).is_some(),
+                &["path", "id", "alias"],
+            ),
+            "label" => bool_axis(issues, &dotted, v),
+            "cardinality" => enum_axis(
+                issues,
+                &dotted,
+                v,
+                |s| cardinality_from_str(s).is_some(),
+                &["one", "many"],
+            ),
+            "inverse" => {
+                if v.as_str().is_none() {
+                    issues.push(ConfigIssue {
+                        key: dotted,
+                        kind: ConfigIssueKind::InvalidValue {
+                            value: value_summary(v),
+                            expected: vec!["a relation name".into()],
+                        },
+                    });
+                }
+            }
+            "means" => {} // free-form human gloss — carried, not read (§2)
+            other => {
+                let mut valid: Vec<&str> = REFERENCE_KEYS.to_vec();
+                valid.extend_from_slice(RELATION_DEF_KEYS);
+                if let Some(sug) = nearest(other, &valid) {
+                    issues.push(unknown(dotted, format!("{prefix}.{sug}")));
+                }
+            }
+        }
+    }
+}
+
+/// Diagnose the `fields:` block — a mapping of frontmatter field name to a
+/// controlled-vocabulary declaration (`values` / `vocabulary` / `reify`).
+fn diagnose_fields(issues: &mut Vec<ConfigIssue>, value: &Value) {
+    let Some(map) = value.as_mapping() else {
+        return block_shape_issue(issues, "fields", value);
+    };
+    for (name, spec) in map {
+        let prefix = format!("fields.{name}");
+        let Some(entry) = spec.as_mapping() else {
+            block_shape_issue(issues, &prefix, spec);
+            continue;
+        };
+        for (key, v) in entry {
+            let dotted = format!("{prefix}.{key}");
+            match key.as_str() {
+                "values" => enum_axis(
+                    issues,
+                    &dotted,
+                    v,
+                    |s| OpenClosed::from_config_str(s).is_some(),
+                    &["open", "closed"],
+                ),
+                "vocabulary" => {
+                    if v.as_str().is_none() {
+                        issues.push(ConfigIssue {
+                            key: dotted,
+                            kind: ConfigIssueKind::InvalidValue {
+                                value: value_summary(v),
+                                expected: vec!["a link to a vocabulary document".into()],
+                            },
+                        });
+                    }
+                }
+                "reify" => bool_axis(issues, &dotted, v),
+                other => {
+                    if let Some(sug) = nearest(other, FIELD_KEYS) {
+                        issues.push(unknown(dotted, format!("{prefix}.{sug}")));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -844,37 +1214,6 @@ fn value_summary(value: &Value) -> String {
     }
 }
 
-/// The recognized key at `candidates` that most resembles `key`, when one is
-/// within a small edit distance (a likely typo) — else `None`. Distance is
-/// measured case-sensitively so a case-only slip surfaces its canonical spelling.
-/// The threshold (2) is deliberately tight: recognized keys are distinctive
-/// enough that structural fields (`title`, `part_of`, `id`) and ordinary user
-/// fields fall outside it, so they are never mistaken for typos.
-fn nearest(key: &str, candidates: &[&str]) -> Option<String> {
-    candidates
-        .iter()
-        .map(|cand| (levenshtein(key, cand), *cand))
-        .filter(|(d, _)| (1..=2).contains(d))
-        .min_by_key(|(d, _)| *d)
-        .map(|(_, cand)| cand.to_string())
-}
-
-/// Levenshtein edit distance — the classic two-row dynamic program.
-fn levenshtein(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut curr = vec![0usize; b.len() + 1];
-    for (i, ca) in a.chars().enumerate() {
-        curr[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cost = if ca == *cb { 0 } else { 1 };
-            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[b.len()]
-}
-
 /// Parse a `metadata.format` config value (`yaml`/`json`/`toml`/`fig`) into a
 /// metadata [`fig::Format`], honoring the compiled-in formats — the public form of
 /// [`format_from_str`], for callers that name a frontmatter language from outside
@@ -914,6 +1253,23 @@ fn format_str(format: fig::Format) -> &'static str {
         #[cfg(feature = "fig-lang")]
         fig::Format::Fig => "fig",
         _ => "yaml",
+    }
+}
+
+/// Parse a relation `cardinality` config value (`one`/`many`); unknown → `None`.
+fn cardinality_from_str(value: &str) -> Option<Cardinality> {
+    match value {
+        "one" => Some(Cardinality::One),
+        "many" => Some(Cardinality::Many),
+        _ => None,
+    }
+}
+
+/// The `cardinality` config spelling for a [`Cardinality`].
+fn cardinality_str(cardinality: Cardinality) -> &'static str {
+    match cardinality {
+        Cardinality::One => "one",
+        Cardinality::Many => "many",
     }
 }
 
@@ -1008,6 +1364,33 @@ mod tests {
                     },
                 ),
             ]),
+            spanning: Some("contents".to_string()),
+            relation_defs: BTreeMap::from([
+                (
+                    "contents".to_string(),
+                    RelationDef {
+                        cardinality: Some(Cardinality::Many),
+                        inverse: Some("part_of".to_string()),
+                        means: Some("documents contained by this one".to_string()),
+                    },
+                ),
+                (
+                    "part_of".to_string(),
+                    RelationDef {
+                        cardinality: Some(Cardinality::One),
+                        inverse: Some("contents".to_string()),
+                        means: None,
+                    },
+                ),
+            ]),
+            fields: BTreeMap::from([(
+                "audience".to_string(),
+                FieldSpec {
+                    values: OpenClosed::Closed,
+                    vocabulary: "[Audiences](/vocab/audiences.yaml)".to_string(),
+                    reify: true,
+                },
+            )]),
             id_storage: IdStorage::Frontmatter,
             default_embed_format: fig::Format::Yaml,
             embed_style: EmbedStyle::CodeBlock,
@@ -1158,6 +1541,85 @@ mod tests {
             }
             other => panic!("expected InvalidValue, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn relation_defs_and_spanning_apply_and_round_trip() {
+        // A fully self-described `part`/`whole` vocabulary from config.
+        let mut top = Mapping::new();
+        top.insert("spanning".into(), Value::String("part".into()));
+        let mut rels = Mapping::new();
+        let mut part = Mapping::new();
+        part.insert("cardinality".into(), Value::String("many".into()));
+        part.insert("inverse".into(), Value::String("whole".into()));
+        part.insert("means".into(), Value::String("the pieces".into()));
+        let mut whole = Mapping::new();
+        whole.insert("cardinality".into(), Value::String("one".into()));
+        whole.insert("inverse".into(), Value::String("part".into()));
+        rels.insert("part".into(), Value::Mapping(part));
+        rels.insert("whole".into(), Value::Mapping(whole));
+        top.insert("relations".into(), Value::Mapping(rels));
+
+        let cfg = WorkspaceConfig::from_meta(&Value::Mapping(top));
+        assert_eq!(cfg.spanning.as_deref(), Some("part"));
+        let part_def = cfg.relation_defs.get("part").expect("part def");
+        assert_eq!(part_def.cardinality, Some(Cardinality::Many));
+        assert_eq!(part_def.inverse.as_deref(), Some("whole"));
+        assert_eq!(part_def.means.as_deref(), Some("the pieces"));
+        // A clean self-described vocabulary passes its own diagnosis.
+        assert!(diagnose(&Value::Mapping(cfg.to_mapping())).is_empty());
+    }
+
+    #[test]
+    fn diagnose_flags_a_spanning_relation_whose_inverse_is_many() {
+        // `spanning: part`, but its inverse `whole` is declared `many` — that
+        // cannot be a single-parent tree.
+        let mut top = Mapping::new();
+        top.insert("spanning".into(), Value::String("part".into()));
+        let mut rels = Mapping::new();
+        let mut part = Mapping::new();
+        part.insert("inverse".into(), Value::String("whole".into()));
+        let mut whole = Mapping::new();
+        whole.insert("cardinality".into(), Value::String("many".into()));
+        rels.insert("part".into(), Value::Mapping(part));
+        rels.insert("whole".into(), Value::Mapping(whole));
+        top.insert("relations".into(), Value::Mapping(rels));
+
+        let issues = diagnose(&Value::Mapping(top));
+        assert!(
+            issues.iter().any(|i| i.key == "spanning"
+                && matches!(&i.kind, ConfigIssueKind::SpanningNotSingleParent { inverse } if inverse == "whole")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn diagnose_flags_bad_field_and_relation_def_values() {
+        // fields.audience.values bad + a relations def with bad cardinality.
+        let mut top = Mapping::new();
+        let mut fields = Mapping::new();
+        let mut audience = Mapping::new();
+        audience.insert("values".into(), Value::String("secret".into())); // not open/closed
+        audience.insert("vocabulary".into(), Value::String("/vocab/aud.yaml".into()));
+        fields.insert("audience".into(), Value::Mapping(audience));
+        top.insert("fields".into(), Value::Mapping(fields));
+        let mut rels = Mapping::new();
+        let mut c = Mapping::new();
+        c.insert("cardinality".into(), Value::String("two".into())); // not one/many
+        rels.insert("contents".into(), Value::Mapping(c));
+        top.insert("relations".into(), Value::Mapping(rels));
+
+        let issues = diagnose(&Value::Mapping(top));
+        assert!(
+            issues.iter().any(|i| i.key == "fields.audience.values"),
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.key == "relations.contents.cardinality"),
+            "{issues:?}"
+        );
     }
 
     #[test]

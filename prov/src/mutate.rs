@@ -841,6 +841,11 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         let (mut records, bin_title, bin_part_of) = match &existing_index {
             Some(index) => {
                 let (_, bin_doc) = self.load(index).await?;
+                // The bin index is a record store — reject a markdown carrier
+                // (DESIGN §5, whole-file rule).
+                if let Some(carrier) = bin_doc.carrier {
+                    crate::document::require_whole_file(index, carrier)?;
+                }
                 let recs = bin_doc
                     .meta
                     .get("deleted")
@@ -1024,6 +1029,11 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .await?
             .ok_or_else(|| Error::Structure("workspace has no recycle bin".into()))?;
         let (_, bin_doc) = self.load(&bin_index).await?;
+        // The bin index is a record store — reject a markdown carrier
+        // (DESIGN §5, whole-file rule).
+        if let Some(carrier) = bin_doc.carrier {
+            crate::document::require_whole_file(&bin_index, carrier)?;
+        }
         let records: Vec<Value> = bin_doc
             .meta
             .get("deleted")
@@ -1148,6 +1158,11 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .await?
             .ok_or_else(|| Error::Structure("workspace has no recycle bin".into()))?;
         let (_, bin_doc) = self.load(&bin_index).await?;
+        // The bin index is a record store — reject a markdown carrier
+        // (DESIGN §5, whole-file rule).
+        if let Some(carrier) = bin_doc.carrier {
+            crate::document::require_whole_file(&bin_index, carrier)?;
+        }
         let records: Vec<Value> = bin_doc
             .meta
             .get("deleted")

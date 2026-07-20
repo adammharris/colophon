@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::document::{Document, MetaCarrier, whole_file_format};
+use crate::document::{Document, MetaCarrier, require_whole_file, whole_file_format};
 use crate::edit::MetaEditor;
 use crate::error::Result;
 use crate::identity::Id;
@@ -349,6 +349,9 @@ impl FileIndex {
                 .map(MetaCarrier::WholeFile)
                 .unwrap_or(MetaCarrier::Fenced(fig::EmbedType::FrontmatterYaml))
         });
+        // A registry is a record store, so it must be a whole-file config
+        // document — a markdown carrier is refused (DESIGN §5, whole-file rule).
+        require_whole_file(path, carrier)?;
         let mut index = Self {
             live: InMemoryIndex::new(),
             tombstones: BTreeSet::new(),
@@ -424,25 +427,13 @@ impl FileIndex {
                     top.insert("registry".into(), Value::Mapping(registry));
                     crate::meta::serialize_mapping(&top, format)?
                 }
-                // Fenced host: a block map cannot be spliced into the fence
-                // (fig embed limitation), so records land per-key — fig
-                // auto-creates the chain as a flow map. Valid, just inline.
+                // A registry is always whole-file (enforced in `parse`/`new`), so
+                // a fenced carrier cannot reach here; refuse defensively rather
+                // than silently write a store the load path would then reject.
                 MetaCarrier::Fenced(_) => {
-                    let mut editor = MetaEditor::open_or_init(&self.host_text, Some(self.carrier))?;
-                    for (id, value) in &current {
-                        let fig_value = value
-                            .clone()
-                            .map(fig::Value::Str)
-                            .unwrap_or(fig::Value::Null);
-                        editor.set_value(
-                            &[
-                                fig::Segment::Key("registry"),
-                                fig::Segment::Key(id.as_str()),
-                            ],
-                            fig_value,
-                        )?;
-                    }
-                    editor.render()?
+                    return Err(crate::error::Error::MarkdownStore(
+                        self.host.clone().unwrap_or_default(),
+                    ));
                 }
             };
             self.host_text = rendered.clone();
@@ -754,9 +745,10 @@ registry:
     }
 
     #[test]
-    fn registry_can_live_in_markdown_frontmatter() {
-        // The registry embedded in a prose document: records in the fenced
-        // block, body untouched.
+    fn a_markdown_carrier_registry_is_refused() {
+        // A registry is a record store (DESIGN §5, whole-file rule): a markdown
+        // (fenced) carrier has no stable home for prov's sorted records, so it is
+        // rejected at load rather than read.
         let host = "---
 title: Registry
 part_of: index.md
@@ -765,32 +757,12 @@ registry:
 ---
 # About this file
 
-The workspace's ID registry lives in my frontmatter.
+Prose does not belong in a record store.
 ";
-        let mut ix = FileIndex::parse(Path::new("registry.md"), host).unwrap();
-        assert_eq!(
-            ix.resolve(&Id("bcdfghj".into())),
-            Some(PathBuf::from("a.md"))
-        );
-        ix.set_path(&Id("bcdfghj".into()), Path::new("moved/a.md"));
-        let out = ix.render().unwrap();
+        let err = FileIndex::parse(Path::new("registry.md"), host).unwrap_err();
         assert!(
-            out.starts_with(
-                "---
-title: Registry"
-            ),
-            "fences kept: {out}"
-        );
-        assert!(out.contains("bcdfghj: moved/a.md"), "{out}");
-        assert!(
-            out.ends_with("The workspace's ID registry lives in my frontmatter.\n"),
-            "body kept: {out}"
-        );
-
-        let back = FileIndex::parse(Path::new("registry.md"), &out).unwrap();
-        assert_eq!(
-            back.resolve(&Id("bcdfghj".into())),
-            Some(PathBuf::from("moved/a.md"))
+            matches!(err, crate::error::Error::MarkdownStore(_)),
+            "expected MarkdownStore, got {err:?}"
         );
     }
 

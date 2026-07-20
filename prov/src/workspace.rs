@@ -294,6 +294,62 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
         Ok(doc.meta.get(key).cloned())
     }
 
+    /// The effective [`WorkspaceConfig`] this root declares — the root's inline
+    /// `prov:` block layered under the dedicated config document, over the
+    /// defaults (the precedence `config document > root block > default`, the same
+    /// layering [`config_findings`](crate::validate) lints and the CLI applies).
+    /// This is how a library-level pass (validation's term-consistency check)
+    /// reconstructs the `fields`/vocabulary declarations without the CLI's `Ctx`.
+    ///
+    /// [`WorkspaceConfig`]: crate::config::WorkspaceConfig
+    pub async fn effective_config(&self, root_doc: &Path) -> Result<crate::config::WorkspaceConfig> {
+        let mut config = crate::config::WorkspaceConfig::default();
+        if let Ok((_, root)) = self.load(root_doc).await
+            && let Some(block) = root.meta.get(crate::config::ROOT_CONFIG_KEY)
+        {
+            config.apply(block);
+        }
+        if let Some(config_doc) = self.config_path(root_doc).await? {
+            let (_, doc) = self.load(&config_doc).await?;
+            config.apply(&doc.meta);
+        }
+        Ok(config)
+    }
+
+    /// Resolve a `fields.<field>.vocabulary` pointer (a raw link string from
+    /// config) to the vocabulary document's path, relative to `root_doc`. The
+    /// same link machinery the structural pointers use ([`pointer_target`]), but
+    /// the pointer is a config value rather than a relation on the root.
+    ///
+    /// [`pointer_target`]: Self::pointer_target
+    pub fn vocabulary_path(&self, root_doc: &Path, pointer: &str) -> Option<PathBuf> {
+        match self.resolve_link(&link::normalize(root_doc), &Link::parse(pointer)) {
+            Target::Path(path) => Some(path),
+            _ => None,
+        }
+    }
+
+    /// Load and parse the controlled vocabulary a `fields` pointer names. `None`
+    /// when the pointer does not resolve or the target is not a vocabulary store
+    /// (no `vocabulary` marker). The store must be a whole-file config document
+    /// (DESIGN §5); a markdown carrier is refused via [`require_whole_file`].
+    ///
+    /// [`require_whole_file`]: crate::document::require_whole_file
+    pub async fn load_vocabulary(
+        &self,
+        root_doc: &Path,
+        pointer: &str,
+    ) -> Result<Option<crate::vocabulary::Vocabulary>> {
+        let Some(path) = self.vocabulary_path(root_doc, pointer) else {
+            return Ok(None);
+        };
+        let (_, doc) = self.load(&path).await?;
+        if let Some(carrier) = doc.carrier {
+            crate::document::require_whole_file(&path, carrier)?;
+        }
+        Ok(crate::vocabulary::Vocabulary::from_meta(&doc.meta))
+    }
+
     /// Build the workspace's [`TitleIndex`] by scanning every document under the
     /// root and registering it under its `title` and its file stem. This is a
     /// **derived cache** (DESIGN §5): rebuilt on demand, never persisted. It is

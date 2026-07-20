@@ -312,9 +312,10 @@ fn workspace(ctx: &Ctx) -> Result<Workspace<StdFs, Minter, FileIndex>, AnyError>
             None => FileIndex::new(ctx.config.default_embed_format),
         }
     };
-    // The relation vocabulary picks up any per-relation `style` overrides the
-    // config document declares (up≠down), overlaid on the diaryx default set.
-    let relations = RelationSet::diaryx().with_styles(&ctx.config.resolved_relation_styles());
+    // The relation vocabulary is derived from the config: its declared
+    // definitions + spanning (or the diaryx preset when none are declared),
+    // with per-relation `style` overrides (up≠down) overlaid.
+    let relations = RelationSet::from_config(&ctx.config);
     Ok(Workspace::builder(StdFs)
         .root(&ctx.root_dir)
         .relations(relations)
@@ -1754,6 +1755,11 @@ fn cmd_config(key: Option<&str>, value: Option<&str>, setup: bool) -> CmdResult 
                         eprintln!(
                             "prov: `{value}` is not a valid {key} (expected: {})",
                             expected.join(", ")
+                        );
+                    }
+                    prov::ConfigIssueKind::SpanningNotSingleParent { inverse } => {
+                        eprintln!(
+                            "prov: spanning relation's inverse `{inverse}` must be `cardinality: one` to form a single-parent tree"
                         );
                     }
                 }

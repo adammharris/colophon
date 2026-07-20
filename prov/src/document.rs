@@ -61,6 +61,21 @@ pub fn whole_file_format(path: &Path) -> Option<fig::Format> {
     }
 }
 
+/// Enforce that a **record store** at `path` (the id registry, the recycle-bin
+/// index, a flat vocabulary) is a whole-file config document, returning its
+/// format. A [`MetaCarrier::Fenced`] carrier — markdown frontmatter — is
+/// rejected with [`Error::MarkdownStore`]: prov re-lays-out these stores as a
+/// sorted record list (DESIGN §5), so human prose has no stable home in them and
+/// unambiguous extension→format sniffing depends on the carrier being whole-file.
+/// The single choke point every store loader passes through, so the rule cannot
+/// be enforced in one place and forgotten in another.
+pub fn require_whole_file(path: &Path, carrier: MetaCarrier) -> Result<fig::Format> {
+    match carrier {
+        MetaCarrier::WholeFile(format) => Ok(format),
+        MetaCarrier::Fenced(_) => Err(crate::error::Error::MarkdownStore(path.to_path_buf())),
+    }
+}
+
 /// Whether prov can read `path` as text — a recognized body format
 /// (Markdown/Djot/HTML) or a whole-file metadata format (YAML/JSON/…). Its
 /// negation is an **opaque payload**: a file prov treats as bytes (an image,
