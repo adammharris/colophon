@@ -136,14 +136,16 @@ fn a_file_literally_named_with_an_at_sign_is_still_addressable() {
 }
 
 #[test]
-fn parents_is_refused_when_in_is_not_a_route() {
-    // `-p` creates missing *route segments*; a path or an id names something that
-    // must already exist, so `-p` alongside one is a mistake worth naming rather
-    // than silently ignoring.
+fn parents_with_a_path_parent_is_inert_for_the_parent_but_enables_leaf_idempotency() {
+    // `-p` synthesizes missing *route segments*; a path parent has none, so `-p`
+    // is inert there — but it still applies to the *leaf* (`mkdir -p` semantics),
+    // so `-p` with a path parent is allowed, not an error.
     let dir = journal("p-nonroute");
     let (ok, out) = run(&dir, &["new", "X", "--in", "daily/2026/07/index.md", "-p"]);
-    assert!(!ok, "-p with a path must fail: {out}");
-    assert!(out.contains("not a route"), "{out}");
+    assert!(ok, "-p with a path parent creates the leaf: {out}");
+    // And it is idempotent: a second run is a no-op, not a collision.
+    let (ok, out) = run(&dir, &["new", "X", "--in", "daily/2026/07/index.md", "-p"]);
+    assert!(ok && out.contains("exists"), "rerun is a no-op: {out}");
 }
 
 #[test]

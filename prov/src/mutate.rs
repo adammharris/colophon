@@ -836,9 +836,11 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
             .to_path_buf();
         let items_dir = bin_dir.join("items");
 
-        // The bin index's current records (and its own title/`part_of`, so a
-        // wholesale re-render preserves them). Absent bin → empty, with defaults.
-        let (mut records, bin_title, bin_part_of) = match &existing_index {
+        // The bin index's current records (and its own title, so a wholesale
+        // re-render preserves it). The bin is machinery, reached one-way through
+        // the root's `recycle_bin` pointer, so it carries no `part_of` back-link
+        // (DESIGN §5, "link target kinds"). Absent bin → empty, with a default title.
+        let (mut records, bin_title) = match &existing_index {
             Some(index) => {
                 let (_, bin_doc) = self.load(index).await?;
                 // The bin index is a record store — reject a markdown carrier
@@ -858,19 +860,9 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
                     .and_then(Value::as_str)
                     .unwrap_or("Recycle Bin")
                     .to_string();
-                let part_of = bin_doc
-                    .meta
-                    .get("part_of")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| link::relative(&bin_dir, &root));
-                (recs, title, part_of)
+                (recs, title)
             }
-            None => (
-                Vec::new(),
-                "Recycle Bin".to_string(),
-                link::relative(&bin_dir, &root),
-            ),
+            None => (Vec::new(), "Recycle Bin".to_string()),
         };
 
         // Where the bytes go: mirror the original path under the (unreached)
@@ -941,7 +933,6 @@ impl<FS: Storage, IdP: IdentityPolicy, Ix: IndexStore> Workspace<FS, IdP, Ix> {
 
         let mut bin_map = crate::meta::Mapping::new();
         bin_map.insert("title".into(), Value::String(bin_title));
-        bin_map.insert("part_of".into(), Value::String(bin_part_of));
         bin_map.insert("deleted".into(), Value::Sequence(records));
         let bin_text = crate::meta::serialize_mapping(&bin_map, format)?;
 
@@ -3899,12 +3890,11 @@ mod tests {
 
     #[test]
     fn moving_the_registry_document_does_not_resurrect_it_at_its_old_path() {
-        // The registry document is a document: it has a title and a `part_of`, it
-        // is a node of the tree, and it can be moved like any other. But `commit`
-        // stages the registry's own write *last*, so unless that write follows the
-        // move it lands at the old path — recreating the file the op just renamed
-        // away from, with all the records in it, while the file the root now
-        // points at has none.
+        // The registry document is a document — reached from the root, movable
+        // like any other. But `commit` stages the registry's own write *last*, so
+        // unless that write follows the move it lands at the old path — recreating
+        // the file the op just renamed away from, with all the records in it, while
+        // the file the root now points at has none.
         let dir = tempdir("move-registry");
         write(
             &dir,
@@ -3931,11 +3921,12 @@ mod tests {
 
     #[test]
     fn an_op_that_rewrites_the_registry_document_is_not_clobbered_by_its_own_records() {
-        // The likelier shape of the same hazard: the registry document declares
-        // `part_of` back at the root, so moving the *root* re-relativizes it —
+        // The same hazard when a store *does* carry a link (machinery gets no
+        // `part_of` by default, but a hand-added one — as here — must still be
+        // maintained): moving the *root* re-relativizes the registry's `part_of`,
         // staging a write to the registry document. `commit` then stages its own
         // write to that document, rendered from the text it read at startup, and
-        // last-write-wins silently drops the re-relativized link.
+        // last-write-wins would silently drop the re-relativized link.
         let dir = tempdir("rewrite-registry");
         write(
             &dir,

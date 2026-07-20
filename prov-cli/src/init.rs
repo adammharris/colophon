@@ -878,7 +878,7 @@ pub(crate) fn cmd_init(
     })?;
 
     // Write the root, and learn which file is the structural root document (the
-    // node the config's `part_of` points back at, and the `next:` hint names).
+    // node the `config` pointer is added to, and the `next:` hint names).
     // An adopted existing document becomes the root as-is (its config pointer is
     // added after the config document is written, below); otherwise a fresh root
     // is synthesized in the chosen carrier.
@@ -922,19 +922,14 @@ pub(crate) fn cmd_init(
     };
 
     // Write the config document beside the root, in the chosen metadata format:
-    // self-describing (title + `part_of` back to the root, in the chosen link
-    // style) plus the recorded preferences. A whole-file config document (DESIGN
-    // §6/§7), the same shape as the registry.
+    // self-describing (a title) plus the recorded preferences. A whole-file config
+    // document (DESIGN §6/§7), the same shape as the registry — and, like the
+    // registry, it carries no `part_of`: machinery is reached one-way through the
+    // root's `config` pointer, so a back-link would assert a tree membership it
+    // does not have (DESIGN §5, "link target kinds").
     let config_rel = PathBuf::from(&config_name);
-    let part_of = link::format_link(
-        ws_config.link_format(),
-        &config_rel,
-        Path::new(&root_name),
-        &title,
-    );
     let mut config_map = Mapping::new();
     config_map.insert("title".into(), Value::String("prov config".into()));
-    config_map.insert("part_of".into(), Value::String(part_of));
     for (key, value) in ws_config.to_mapping() {
         config_map.insert(key, value);
     }

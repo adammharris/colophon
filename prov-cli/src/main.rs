@@ -354,15 +354,13 @@ fn ensure_registry(ctx: &mut Ctx) -> Result<(), AnyError> {
     let format = ctx.config.default_embed_format;
     let registry_rel = PathBuf::from(sidecar_name(REGISTRY_STEM, format));
 
-    // Seed: a self-describing node titled "ID registry" with a bare-path `part_of`
-    // back to the root. The crash-safe "create sidecar + point the root at it"
-    // landing lives in the library ([`Workspace::link_sidecar`]).
+    // Seed: a self-describing node titled "ID registry". Machinery is reached
+    // *one-way* through the root's `registry` pointer, so it carries no `part_of`
+    // back-link — that would assert a spanning-tree membership it does not have
+    // (DESIGN §5, "link target kinds"). The crash-safe "create sidecar + point the
+    // root at it" landing lives in the library ([`Workspace::link_sidecar`]).
     let mut seed = Mapping::new();
     seed.insert("title".into(), Value::String("ID registry".into()));
-    seed.insert(
-        "part_of".into(),
-        Value::String(ctx.root_doc.to_string_lossy().into_owned()),
-    );
     let probe: Workspace<StdFs> = Workspace::builder(StdFs).root(&ctx.root_dir).build();
     let created =
         block_on(probe.link_sidecar(&ctx.root_doc, "registry", &registry_rel, &seed, format))?;
@@ -1203,16 +1201,11 @@ fn resolve_placement(
     dry_run: bool,
 ) -> Result<Option<PathBuf>, AnyError> {
     let route = match parse_target(target) {
-        // A path or an id names something that must already exist; only a route
-        // has segments to synthesize, so only a route consults `-p`.
+        // A path or an id names a parent that must already exist — it has no
+        // segments to synthesize. `-p` still applies to the *leaf* (idempotent
+        // create, handled by the caller), so it is allowed here, just inert for
+        // the parent.
         TargetSpec::Path(_) | TargetSpec::Id(_) => {
-            if parents {
-                return Err(format!(
-                    "-p creates missing *route* segments, but --in {target} is not a route\n\
-                     routes start with @ (e.g. --in @Daily/2026/08)"
-                )
-                .into());
-            }
             let resolved = resolve_target(target)?;
             return Ok(Some(ws_rel(ctx, &resolved)?));
         }
@@ -1330,6 +1323,44 @@ fn cmd_new(
             parent_rel.parent().unwrap_or(Path::new("")).join(name)
         }
     };
+    // Leaf idempotency (`-p`): a target that already exists as the *same*
+    // document (same title) is a no-op — `mkdir -p` for the leaf, completing the
+    // route-parent `-p` above, so a daily-note cron can re-run the same command.
+    // A path held by a *different*-titled document is a real collision and still
+    // errors. Without `-p`, an existing leaf errors as before (via `create`).
+    if parents && ws.fs_path(&path).exists() {
+        let (_, existing) = load(&ws.fs_path(&path))?;
+        if existing.meta.get("title").and_then(Value::as_str) != Some(title) {
+            return Err(format!(
+                "{} already exists with a different title — refusing to reuse it \
+                 (pick another title, or --as to name a different file)",
+                path.display()
+            )
+            .into());
+        }
+        if dry_run {
+            println!(
+                "exists: {} (in {}) — no-op",
+                path.display(),
+                parent_rel.display()
+            );
+            return Ok(ExitCode::SUCCESS);
+        }
+        // Ensure the containment link both ways (idempotent; refuses a contested
+        // parent), so an existing-but-unlinked file converges too.
+        block_on(ws.adopt(&path, &parent_rel))?;
+        persist(&ctx, &mut ws)?;
+        println!("exists: {} (in {})", path.display(), parent_rel.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+    if dry_run {
+        println!(
+            "would create {} (in {})",
+            path.display(),
+            parent_rel.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     // (`ws` is the one built above — reusing it keeps any IDs a route just minted
     // in the same in-memory index this create registers into.)
     let created = block_on(ws.create_with_title(&path, &parent_rel, title))?;
@@ -2001,11 +2032,11 @@ fn cmd_config(
 
 /// Ensure the workspace *declares* a config document, bootstrapping one when it
 /// does not: create `prov.<ext>` (in the workspace's metadata format) beside
-/// the root (self-described with a title and a `part_of` back to the root, in
-/// the workspace link style) and add the `config` pointer to the root's
-/// metadata. Returns its path relative to the root. Mirrors [`ensure_registry`],
-/// including its change set: a config document the root does not point at is one
-/// nothing will ever read.
+/// the root (self-described with a title) and add the `config` pointer to the
+/// root's metadata. Returns its path relative to the root. Mirrors
+/// [`ensure_registry`], including its change set: a config document the root does
+/// not point at is one nothing will ever read. Like the registry, it carries no
+/// `part_of` — machinery is reached one-way through the root's pointer (DESIGN §5).
 fn ensure_config(ctx: &mut Ctx) -> Result<PathBuf, AnyError> {
     let probe: Workspace<StdFs> = Workspace::builder(StdFs).root(&ctx.root_dir).build();
     if let Some(existing) = block_on(probe.config_path(&ctx.root_doc))? {
@@ -2014,29 +2045,8 @@ fn ensure_config(ctx: &mut Ctx) -> Result<PathBuf, AnyError> {
     let format = ctx.config.default_embed_format;
     let config_rel = PathBuf::from(sidecar_name(CONFIG_STEM, format));
 
-    // The root's title (or a title from its filename) labels the back-link, which
-    // is authored in the workspace's own link style (unlike the registry's bare
-    // path — the config document is user-facing prose, the registry is machinery).
-    let root_full = ctx.root_dir.join(&ctx.root_doc);
-    let root_title = std::fs::read_to_string(&root_full)
-        .ok()
-        .and_then(|t| Document::parse(&ctx.root_doc, &t).ok())
-        .and_then(|d| {
-            d.meta
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| prov::path_to_title(&ctx.root_doc));
-    let part_of = prov::format_link(
-        ctx.config.link_format(),
-        &config_rel,
-        &ctx.root_doc,
-        &root_title,
-    );
     let mut seed = Mapping::new();
     seed.insert("title".into(), Value::String("prov config".into()));
-    seed.insert("part_of".into(), Value::String(part_of));
 
     let created =
         block_on(probe.link_sidecar(&ctx.root_doc, "config", &config_rel, &seed, format))?;

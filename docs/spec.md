@@ -109,14 +109,14 @@ a known one (casing/spelling drift). Diagnosis only — no autofix.
 
 ### The vocabulary file
 
-A vocabulary is a **whole-file config document** (§4) — a self-describing node
-(`title`, `part_of` back toward the root) declaring a `vocabulary` marker and a
-`terms:` mapping:
+A flat vocabulary is a **whole-file config document** (§5) — a self-describing
+node (a `title`) declaring a `vocabulary` marker and a `terms:` mapping. Like the
+registry it is *machinery*, reached one-way through the field's `vocabulary`
+pointer, so it carries no `part_of` back-link (see §4):
 
 ```yaml
 # vocab/audiences.yaml
 title: Audiences
-part_of: '[My Vault](/README.md)'
 vocabulary:
   field: audience
   values: closed
@@ -136,10 +136,39 @@ prov reasons about the term *keys*, each term's `id`, and `retired`; every other
 key (`means`, `gate`) is tier-3 payload it transports untouched — which is how a
 diaryx audience hangs gate/theme config off a term prov still validates
 membership in. A **reified** vocabulary (`reify: true`) is instead an index node
-whose `contents` are term nodes — ordinary containment, so each term gets a prose
-body and backlinks; only the *flat* form is a whole-file store.
+whose `contents` are term nodes — ordinary *content* containment, so each term is a
+real node (with `part_of`, a prose body, and backlinks); only the *flat* form is a
+whole-file machinery store.
 
-## 4. Where things live — placement rules
+## 4. Link target kinds
+
+prov's graph is **homogeneous**: every node is a plaintext document with an
+embedded metadata block. Heterogeneity — binaries, machinery, external
+resources, controlled terms — never enters the graph as a node; it is *referenced*
+through a typed field on a real node, and the field's kind is the contract. There
+is no such thing as "linking a non-content file directly." The kinds:
+
+| Target | Declared as | Contract |
+| --- | --- | --- |
+| **Content node** | a relation (`contents`/`part_of`/`links`/your vocabulary) | in the graph; two-way (inverse maintained); ID-able; rewritten on move; orphan-checked |
+| **Machinery** | a one-way pointer relation (`registry`, `config`, `recycle_bin`, a `fields` `vocabulary`) | plaintext, reached *from the root only*; **no inverse, no `part_of` back-link, not ID'd as content, not orphan-checked, not in the spanning tree** |
+| **Opaque payload** | the `content` field | *not a node* — the bytes are the body of a sidecar node (an attachment); hashed for fixity, never parsed |
+| **Controlled term** | a `fields` value | resolved against a vocabulary store, checked (§3) — not traversed |
+| **External** | a URL | recognized by syntax, never resolved or validated |
+
+Two consequences worth stating outright:
+
+- **A non-plaintext file is wrapped, not linked.** To bring an image or PDF into
+  the workspace, `attach` mints a sidecar (`photo.jpg.yaml`) — an ordinary content
+  node whose `content` field names the opaque payload. The graph stays all-plaintext;
+  the binary rides along as a node's body.
+- **Machinery is reached one-way.** The root points *down* at a machine file
+  through its typed pointer (`config: prov.yaml`); the machine file declares no
+  back-link. It is not content — not in the containment tree, not ID'd, not
+  orphan-checked — so a `part_of` back to the root would assert a tree membership
+  it does not have. Its only self-description is a human `title`.
+
+## 5. Where things live — placement rules
 
 Because reachability makes an inline block and a linked file *semantically
 identical* (both unfold from the root), where a thing lives is an ergonomic
@@ -165,7 +194,7 @@ choice, never an architectural one. Two rules:
   sidecar; `prov config --home sidecar` moves it into `prov.yaml` and clears the
   block. Both homes read identically, so this only relocates bytes.
 
-## 5. Versioning
+## 6. Versioning
 
 `spec` is an integer. New keys are added *additively* under the same spec until a
 breaking reshape bumps it. A reader may always traverse structure across a spec

@@ -276,8 +276,11 @@ pub(crate) enum Command {
         /// (`id:fpk38j`). A route's missing segments are an error unless `-p`.
         #[arg(long = "in", short = 'i', value_name = "TARGET")]
         in_target: String,
-        /// Create any route segments that don't exist yet, linked into the tree —
-        /// `mkdir -p` for containment. Only meaningful when `--in` is a route.
+        /// `mkdir -p` for containment — idempotent creation. Creates any missing
+        /// route segments (when `--in` is a route), *and* treats an
+        /// already-existing leaf (a same-titled child) as a no-op instead of an
+        /// error. Safe to re-run — a daily-note cron can call the same command
+        /// every day. A path held by a *different*-titled document still errors.
         #[arg(long = "parents", short = 'p', requires = "in_target")]
         parents: bool,
         /// Where `-p` writes the nodes it creates: `nested` (a directory per

@@ -294,8 +294,13 @@ actually distinguishes a prov workspace is **reachability** — the root
 document links its registry through the `registry` relation, so following the
 links from the root discovers the identity state like everything else. Where
 the registry lives is a fact about the workspace, declared in the workspace;
-the registry document self-describes (`title`, `part_of` back to the root) — a
-first-class node, validated by `check` like any other link. Because it is a
+the registry document self-describes with a `title` and is validated by `check`
+like any other reached file. It carries **no `part_of` back-link**, though: the
+registry is *machinery*, reached one-way through the root's `registry` pointer —
+not a content node in the spanning tree — so a `part_of` would assert a
+tree membership it does not have (the "link target kinds" typology in
+`docs/spec.md`; the same one-way rule governs the `config` document, the
+recycle-bin index, and flat vocabulary stores). Because it is a
 **record store** (prov re-lays-out its sorted records), it must be a *whole-file
 config document* (`registry.yaml`, fig-native, …), never markdown-with-
 frontmatter: prose has no stable home in a file prov re-sorts, and the whole-file
