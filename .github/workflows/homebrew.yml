@@ -15,9 +15,10 @@ name: Homebrew
 # rustup cross-target (Apple's linker handles both). On Linux, x86_64 is native
 # and aarch64 uses the gcc-aarch64-linux-gnu cross linker.
 #
-# Runs on `v*.*.*` tags. Prerequisite before the first tagged release: add a
-# HOMEBREW_TAP_TOKEN secret to this repo — a PAT with contents:write on
-# diaryx-org/homebrew-tap.
+# Runs on `v*.*.*` tags. Prerequisite before the first tagged release: install
+# the diaryx-bot GitHub App on diaryx-org/homebrew-tap (Contents:write) and add
+# its App ID + private key as the TAP_APP_ID / TAP_APP_KEY secrets on this repo.
+# The bump-formula job mints a short-lived token from these.
 on:
   push: { tags: [v*.*.*] }
   workflow_dispatch: null
@@ -130,14 +131,27 @@ jobs:
           end
         end
         RUBY
+    # Mint a short-lived installation token from the diaryx-bot GitHub App
+    # (scoped to Contents:write on diaryx-org/homebrew-tap only). Replaces the
+    # old HOMEBREW_TAP_TOKEN PAT, which was tied to a personal account and broke
+    # when the repos moved into the org. The token lasts ~1h and is confined to
+    # this job; only the App's private key (TAP_APP_KEY) is stored long-term.
+    - name: Mint a tap token from the GitHub App
+      id: tap_token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ secrets.TAP_APP_ID }}
+        private-key: ${{ secrets.TAP_APP_KEY }}
+        owner: diaryx-org
+        repositories: homebrew-tap
     - name: Push to the tap
-      env: { COMMITTER_TOKEN: '${{ secrets.HOMEBREW_TAP_TOKEN }}' }
+      env: { COMMITTER_TOKEN: '${{ steps.tap_token.outputs.token }}' }
       run: |
         git clone "https://x-access-token:${COMMITTER_TOKEN}@github.com/diaryx-org/homebrew-tap" tap
         cp /tmp/prov.rb tap/Formula/prov.rb
         cd tap
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git config user.name "diaryx-bot[bot]"
+        git config user.email "306900725+diaryx-bot[bot]@users.noreply.github.com"
         git add Formula/prov.rb
         if git diff --cached --quiet; then
           echo "Formula unchanged — skipping commit"
