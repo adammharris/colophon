@@ -824,8 +824,11 @@ impl<FS: Storage, IdP, Ix: IndexStore> Workspace<FS, IdP, Ix> {
         }
         // Load each field's vocabulary once. A store that fails to load (missing,
         // markdown) simply drops out — its own finding comes from `store_findings`.
-        let mut vocabs: Vec<(String, crate::config::OpenClosed, crate::vocabulary::Vocabulary)> =
-            Vec::new();
+        let mut vocabs: Vec<(
+            String,
+            crate::config::OpenClosed,
+            crate::vocabulary::Vocabulary,
+        )> = Vec::new();
         for (field, spec) in &config.fields {
             if let Ok(Some(vocab)) = self.load_vocabulary(start, &spec.vocabulary).await {
                 vocabs.push((field.clone(), spec.values, vocab));
@@ -1677,7 +1680,10 @@ mod tests {
         let stale = findings
             .iter()
             .find(|f| matches!(f, Finding::StaleLabel { .. }));
-        assert!(stale.is_some(), "expected a StaleLabel finding, got {findings:?}");
+        assert!(
+            stale.is_some(),
+            "expected a StaleLabel finding, got {findings:?}"
+        );
 
         // …and the suggested fix relabels the child to the parent's new title.
         let fix = block_on(w.suggest_fix(stale.unwrap()))

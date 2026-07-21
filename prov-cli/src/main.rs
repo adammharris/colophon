@@ -1947,9 +1947,7 @@ fn move_policy_to_root(ctx: &mut Ctx, declared: &Mapping, recognized: &KeySet) -
             .as_mapping()
             .map(|m| drop_keys(m, recognized))
             .unwrap_or_default();
-        let only_self_describing = remainder
-            .keys()
-            .all(|k| k == "title" || k == "part_of");
+        let only_self_describing = remainder.keys().all(|k| k == "title" || k == "part_of");
         if only_self_describing {
             // The sidecar is now empty of meaning — remove its pointer and delete it.
             let text = std::fs::read_to_string(&root_full)?;

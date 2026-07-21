@@ -2684,7 +2684,10 @@ mod tests {
             read(&dir, "index.md")
         );
         let child = read(&dir, "child.md");
-        assert!(child.contains("[Home Base](id:"), "label refreshed: {child}");
+        assert!(
+            child.contains("[Home Base](id:"),
+            "label refreshed: {child}"
+        );
         assert!(!child.contains("[Root]"), "old label gone: {child}");
 
         // Idempotent: retitling to the same value relabels nothing.

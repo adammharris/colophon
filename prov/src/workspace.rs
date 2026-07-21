@@ -302,7 +302,10 @@ impl<FS: Storage, Id, Ix: IndexStore> Workspace<FS, Id, Ix> {
     /// reconstructs the `fields`/vocabulary declarations without the CLI's `Ctx`.
     ///
     /// [`WorkspaceConfig`]: crate::config::WorkspaceConfig
-    pub async fn effective_config(&self, root_doc: &Path) -> Result<crate::config::WorkspaceConfig> {
+    pub async fn effective_config(
+        &self,
+        root_doc: &Path,
+    ) -> Result<crate::config::WorkspaceConfig> {
         let mut config = crate::config::WorkspaceConfig::default();
         if let Ok((_, root)) = self.load(root_doc).await
             && let Some(block) = root.meta.get(crate::config::ROOT_CONFIG_KEY)

@@ -547,7 +547,10 @@ impl WorkspaceConfig {
                     .get("inverse")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let means = spec.get("means").and_then(Value::as_str).map(str::to_string);
+                let means = spec
+                    .get("means")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 if cardinality.is_some() || inverse.is_some() || means.is_some() {
                     let def = self.relation_defs.entry(name.clone()).or_default();
                     if cardinality.is_some() {
@@ -698,7 +701,10 @@ impl WorkspaceConfig {
                 }
                 if let Some(def) = self.relation_defs.get(name) {
                     if let Some(c) = def.cardinality {
-                        spec.insert("cardinality".into(), Value::String(cardinality_str(c).into()));
+                        spec.insert(
+                            "cardinality".into(),
+                            Value::String(cardinality_str(c).into()),
+                        );
                     }
                     if let Some(inv) = &def.inverse {
                         spec.insert("inverse".into(), Value::String(inv.clone()));

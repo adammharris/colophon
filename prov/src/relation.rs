@@ -200,7 +200,9 @@ impl RelationSet {
                     s = s.with(Relation::one(pointer));
                 }
             }
-            s.registry("registry").config("config").recycle("recycle_bin")
+            s.registry("registry")
+                .config("config")
+                .recycle("recycle_bin")
         };
         if let Some(spanning) = &config.spanning {
             set = set.spanning(spanning);

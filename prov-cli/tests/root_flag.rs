@@ -36,7 +36,11 @@ fn dash_c_operates_on_a_vault_from_outside_it() {
         .args(["-C", vault.to_str().unwrap(), "check"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -48,7 +52,11 @@ fn prov_root_env_operates_on_a_vault_from_outside_it() {
         .args(["check"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -84,7 +92,11 @@ fn relative_arguments_resolve_against_the_root_dir() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(vault.join("remote.md").exists(), "created inside the vault");
     assert!(!base.join("remote.md").exists(), "not in the invoking cwd");
 }

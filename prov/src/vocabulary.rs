@@ -69,8 +69,14 @@ impl Vocabulary {
                             .get("id")
                             .and_then(Value::as_str)
                             .map(|s| Id(s.to_string())),
-                        means: entry.get("means").and_then(Value::as_str).map(str::to_string),
-                        retired: entry.get("retired").and_then(Value::as_bool).unwrap_or(false),
+                        means: entry
+                            .get("means")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        retired: entry
+                            .get("retired")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
                     },
                     // A bare `term:` (null/scalar value) is a live term with no metadata.
                     None => Term {

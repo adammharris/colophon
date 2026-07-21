@@ -43,7 +43,10 @@ fn policy_round_trips_between_the_two_homes_without_changing_the_effective_confi
     let (ok, out) = run(&dir, &["config", "--home", "root"]);
     assert!(ok, "{out}");
     assert!(!dir.join("prov.yaml").exists(), "sidecar removed: {out}");
-    assert!(read(&dir, "index.md").contains("prov:"), "inline block present");
+    assert!(
+        read(&dir, "index.md").contains("prov:"),
+        "inline block present"
+    );
     assert_eq!(run(&dir, &["config", "fixity"]).1.trim(), "all");
     assert_eq!(run(&dir, &["config", "identity"]).1.trim(), "eager");
     assert!(run(&dir, &["check"]).0, "clean after --home root");
@@ -76,9 +79,15 @@ fn only_recognized_policy_travels_and_hand_added_fields_are_never_lost() {
     let (ok, out) = run(&dir, &["config", "--home", "root"]);
     assert!(ok, "{out}");
     assert!(dir.join("prov.yaml").exists(), "sidecar kept: {out}");
-    assert!(read(&dir, "prov.yaml").contains("note: keep me"), "note kept");
+    assert!(
+        read(&dir, "prov.yaml").contains("note: keep me"),
+        "note kept"
+    );
     // The policy moved to the root; the user field did not leak into it.
-    assert!(read(&dir, "index.md").contains("fixity: all"), "policy inlined");
+    assert!(
+        read(&dir, "index.md").contains("fixity: all"),
+        "policy inlined"
+    );
     assert!(
         !read(&dir, "index.md").contains("note:"),
         "user field did not leak into the prov: block"

@@ -32,7 +32,11 @@ fn run(dir: &Path, args: &[&str]) -> (bool, String, String) {
 /// Assert a command succeeded, surfacing both streams on failure.
 fn ok(dir: &Path, args: &[&str]) -> (String, String) {
     let (ok, out, err) = run(dir, args);
-    assert!(ok, "`prov {}` failed:\nstdout:{out}\nstderr:{err}", args.join(" "));
+    assert!(
+        ok,
+        "`prov {}` failed:\nstdout:{out}\nstderr:{err}",
+        args.join(" ")
+    );
     (out, err)
 }
 
@@ -53,7 +57,10 @@ fn mutations_put_the_resulting_path_on_stdout_and_narration_on_stderr() {
         out.trim().ends_with("index.md"),
         "init stdout is the root doc path: {out:?}"
     );
-    assert!(err.contains("initialized"), "init narrates on stderr: {err:?}");
+    assert!(
+        err.contains("initialized"),
+        "init narrates on stderr: {err:?}"
+    );
     assert!(
         !out.contains("initialized"),
         "no narration leaks onto stdout: {out:?}"
@@ -61,29 +68,56 @@ fn mutations_put_the_resulting_path_on_stdout_and_narration_on_stderr() {
 
     // `new` — stdout is exactly the created node path, nothing else.
     let (out, err) = ok(&dir, &["new", "Rust", "--in", "index.md"]);
-    assert_eq!(out.trim(), "rust.md", "new stdout is the bare path: {out:?}");
+    assert_eq!(
+        out.trim(),
+        "rust.md",
+        "new stdout is the bare path: {out:?}"
+    );
     assert!(err.contains("created"), "new narrates on stderr: {err:?}");
 
     // The stdout path is real and pipeable: it round-trips straight into a reader.
     let (title, _) = ok(&dir, &["get", out.trim(), "title"]);
-    assert_eq!(title.trim(), "Rust", "the captured path is usable: {title:?}");
+    assert_eq!(
+        title.trim(),
+        "Rust",
+        "the captured path is usable: {title:?}"
+    );
 
     // `mv` — stdout is the destination (the new handle), narration on stderr.
     let (out, err) = ok(&dir, &["mv", "rust.md", "notes/rust.md"]);
-    assert_eq!(out.trim(), "notes/rust.md", "mv stdout is the destination: {out:?}");
+    assert_eq!(
+        out.trim(),
+        "notes/rust.md",
+        "mv stdout is the destination: {out:?}"
+    );
     assert!(err.contains("moved"), "mv narrates on stderr: {err:?}");
 
     // `duplicate` — stdout is the copy's path.
     ok(&dir, &["new", "Zig", "--in", "index.md"]);
     let (out, err) = ok(&dir, &["duplicate", "zig.md"]);
-    assert_eq!(out.trim(), "zig-copy.md", "duplicate stdout is the copy: {out:?}");
-    assert!(err.contains("duplicated"), "duplicate narrates on stderr: {err:?}");
+    assert_eq!(
+        out.trim(),
+        "zig-copy.md",
+        "duplicate stdout is the copy: {out:?}"
+    );
+    assert!(
+        err.contains("duplicated"),
+        "duplicate narrates on stderr: {err:?}"
+    );
 
     // `set`/`unset` — stdout is the edited document's path (was previously silent).
     let (out, _) = ok(&dir, &["set", "zig.md", "summary", "a note"]);
-    assert_eq!(out.trim(), "zig.md", "set stdout is the edited path: {out:?}");
+    assert_eq!(
+        out.trim(),
+        "zig.md",
+        "set stdout is the edited path: {out:?}"
+    );
     let (out, _) = ok(&dir, &["unset", "zig.md", "summary"]);
-    assert_eq!(out.trim(), "zig.md", "unset stdout is the edited path: {out:?}");
+    assert_eq!(
+        out.trim(),
+        "zig.md",
+        "unset stdout is the edited path: {out:?}"
+    );
 }
 
 #[test]
@@ -96,10 +130,17 @@ fn an_idempotent_no_op_still_yields_the_path_the_contract_is_the_result() {
 
     let (out, err) = ok(&dir, &["new", "Today", "--in", "index.md", "-p"]);
     assert_eq!(out.trim(), "today.md", "first run: {out:?}");
-    assert!(err.contains("created"), "first run narrates create: {err:?}");
+    assert!(
+        err.contains("created"),
+        "first run narrates create: {err:?}"
+    );
 
     let (out, err) = ok(&dir, &["new", "Today", "--in", "index.md", "-p"]);
-    assert_eq!(out.trim(), "today.md", "re-run yields the same path: {out:?}");
+    assert_eq!(
+        out.trim(),
+        "today.md",
+        "re-run yields the same path: {out:?}"
+    );
     assert!(err.contains("exists"), "re-run narrates a no-op: {err:?}");
 }
 
@@ -111,7 +152,10 @@ fn a_dry_run_narrates_but_emits_nothing_pipeable() {
     ok(&dir, &["init", "--yes"]);
     let (out, err) = ok(&dir, &["new", "Draft", "--in", "index.md", "--dry-run"]);
     assert!(out.trim().is_empty(), "dry-run stdout is empty: {out:?}");
-    assert!(err.contains("would create"), "dry-run previews on stderr: {err:?}");
+    assert!(
+        err.contains("would create"),
+        "dry-run previews on stderr: {err:?}"
+    );
 }
 
 #[test]
@@ -122,8 +166,15 @@ fn convert_lists_the_changed_paths_on_stdout() {
     ok(&dir, &["init", "--yes"]);
     ok(&dir, &["new", "A", "--in", "index.md"]);
     let (out, err) = ok(&dir, &["convert", "index.md", "path_style", "relative"]);
-    assert_eq!(out.trim(), "index.md", "convert stdout is the changed path: {out:?}");
-    assert!(err.contains("converted"), "convert narrates the count on stderr: {err:?}");
+    assert_eq!(
+        out.trim(),
+        "index.md",
+        "convert stdout is the changed path: {out:?}"
+    );
+    assert!(
+        err.contains("converted"),
+        "convert narrates the count on stderr: {err:?}"
+    );
 }
 
 #[test]
@@ -133,7 +184,10 @@ fn readers_keep_data_on_stdout_and_chatter_on_stderr() {
 
     // `check` on a clean workspace: stdout empty (no findings), the "ok" on stderr.
     let (out, err) = ok(&dir, &["check"]);
-    assert!(out.trim().is_empty(), "clean check stdout is empty: {out:?}");
+    assert!(
+        out.trim().is_empty(),
+        "clean check stdout is empty: {out:?}"
+    );
     assert!(err.contains("ok"), "clean check says ok on stderr: {err:?}");
 
     // `config <key>` is a reader: the value is stdout, and nothing else.
@@ -143,11 +197,24 @@ fn readers_keep_data_on_stdout_and_chatter_on_stderr() {
     // `config <key> <value>` (a mutation) echoes the value on stdout, "set …" on
     // stderr.
     let (out, err) = ok(&dir, &["config", "references.target", "id"]);
-    assert_eq!(out.trim(), "id", "config set echoes the value on stdout: {out:?}");
-    assert!(err.contains("set"), "config set narrates on stderr: {err:?}");
+    assert_eq!(
+        out.trim(),
+        "id",
+        "config set echoes the value on stdout: {out:?}"
+    );
+    assert!(
+        err.contains("set"),
+        "config set narrates on stderr: {err:?}"
+    );
 
     // `backlinks` with no results: stdout empty, the "no backlinks" note on stderr.
     let (out, err) = ok(&dir, &["backlinks", "index.md"]);
-    assert!(out.trim().is_empty(), "empty backlinks stdout is empty: {out:?}");
-    assert!(err.contains("no backlinks"), "the note is on stderr: {err:?}");
+    assert!(
+        out.trim().is_empty(),
+        "empty backlinks stdout is empty: {out:?}"
+    );
+    assert!(
+        err.contains("no backlinks"),
+        "the note is on stderr: {err:?}"
+    );
 }

@@ -38,17 +38,40 @@ fn a_rerun_with_dash_p_is_a_no_op_but_without_it_errors() {
 
     // Without -p, an existing leaf is still an error (the interactive safety net).
     let (ok, out) = run(&dir, &["new", "A Note", "--in", "index.md"]);
-    assert!(!ok && out.contains("already exists"), "no -p still errors: {out}");
+    assert!(
+        !ok && out.contains("already exists"),
+        "no -p still errors: {out}"
+    );
 }
 
 #[test]
 fn a_different_title_at_the_same_path_is_a_collision_not_a_no_op() {
     let dir = vault("collision");
-    assert!(run(&dir, &["new", "A Note", "--as", "note.md", "--in", "index.md", "-p"]).0);
+    assert!(
+        run(
+            &dir,
+            &["new", "A Note", "--as", "note.md", "--in", "index.md", "-p"]
+        )
+        .0
+    );
     // Same path, different title — must not silently reuse a stranger.
-    let (ok, out) = run(&dir, &["new", "Different", "--as", "note.md", "--in", "index.md", "-p"]);
+    let (ok, out) = run(
+        &dir,
+        &[
+            "new",
+            "Different",
+            "--as",
+            "note.md",
+            "--in",
+            "index.md",
+            "-p",
+        ],
+    );
     assert!(!ok, "different title must error: {out}");
-    assert!(out.contains("different title"), "explains the collision: {out}");
+    assert!(
+        out.contains("different title"),
+        "explains the collision: {out}"
+    );
 }
 
 #[test]
@@ -56,7 +79,10 @@ fn a_route_leaf_is_idempotent_end_to_end() {
     let dir = vault("route");
     // First run builds the whole route and the leaf.
     let (ok, out) = run(&dir, &["new", "2026-07-20", "--in", "@Daily/2026/07", "-p"]);
-    assert!(ok && out.contains("created"), "first builds route + leaf: {out}");
+    assert!(
+        ok && out.contains("created"),
+        "first builds route + leaf: {out}"
+    );
     // A second identical run is a clean no-op — the daily-note cron shape.
     let (ok, out) = run(&dir, &["new", "2026-07-20", "--in", "@Daily/2026/07", "-p"]);
     assert!(ok, "rerun succeeds: {out}");
@@ -79,15 +105,22 @@ fn dash_p_relinks_an_existing_but_unlinked_leaf() {
         .collect();
     std::fs::write(dir.join("index.md"), severed).unwrap();
     assert!(
-        !std::fs::read_to_string(dir.join("index.md")).unwrap().contains("orphan.md"),
+        !std::fs::read_to_string(dir.join("index.md"))
+            .unwrap()
+            .contains("orphan.md"),
         "precondition: link removed"
     );
 
     // `new -p` converges: it re-adopts the existing file rather than erroring.
     let (ok, out) = run(&dir, &["new", "Orphan", "--in", "index.md", "-p"]);
-    assert!(ok && out.contains("exists"), "re-link is a no-op success: {out}");
     assert!(
-        std::fs::read_to_string(dir.join("index.md")).unwrap().contains("orphan.md"),
+        ok && out.contains("exists"),
+        "re-link is a no-op success: {out}"
+    );
+    assert!(
+        std::fs::read_to_string(dir.join("index.md"))
+            .unwrap()
+            .contains("orphan.md"),
         "the parent links the child again: {}",
         std::fs::read_to_string(dir.join("index.md")).unwrap()
     );
